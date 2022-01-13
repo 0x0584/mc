@@ -20,7 +20,10 @@ private:
 };
 
 struct graph {
-  graph();
+  using adjacency_matrix_t = std::vector<std::vector<bool>>;
+  using adjacency_list_t = std::unordered_map<vertex_t, std::vector<vertex_t>>;
+
+  graph() = default;
   graph(const graph &) = delete;
   graph(const std::vector<vertex_t> &V,
 		const std::vector<edge> &E,
@@ -30,8 +33,8 @@ struct graph {
   const std::vector<vertex_t> &neighbors(vertex_t u) const;
   std::size_t num_vertices() const { return edges.size(); }
   std::size_t degree(vertex_t u) const;
-  std::vector<std::vector<bool>> adjacency_matrix() const;
-  const std::unordered_map<vertex_t, std::vector<vertex_t>> &adjacency_list() const;
+  adjacency_matrix_t adjacency_matrix() const;
+  const adjacency_list_t &adjacency_list() const;
 
   std::vector<vertex_t> fahle_max_clique() const;
 

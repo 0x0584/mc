@@ -41,9 +41,9 @@ std::vector<std::vector<bool>> graph::adjacency_matrix() const {
   std::vector<vertex_t> verts = vertices();
   std::vector<std::vector<bool>> vec;
   vec.resize(edges.size());
-  for (int i = 0; i < edges.size(); ++i) {
+  for (unsigned i = 0; i < edges.size(); ++i) {
 	vec[i].resize(edges.size());
-	for (int j = 0; j < edges.size(); ++j) {
+	for (unsigned j = 0; j < edges.size(); ++j) {
 	  vertex_t u = verts.at(i), v = verts.at(j);
 	  const auto &adj_lst = edges.at(u);
 	  vec[i][j] = std::find(adj_lst.begin(), adj_lst.end(), v)
@@ -59,65 +59,44 @@ graph::adjacency_list() const {
 }
 
 struct fahle_max_clique {
+  using index_vector = std::vector<unsigned>;
+
   struct solve {
-	const std::vector<std::vector<bool>> &adj_mtx;
-	std::vector<int> &sol, clique;
-	solve(const std::vector<std::vector<bool>> &adj_mtx, std::vector<int> &sol)
+	const graph::adjacency_matrix_t &adj_mtx;
+	index_vector &sol, clique;
+	solve(const graph::adjacency_matrix_t &adj_mtx, index_vector &sol)
 	  : adj_mtx(adj_mtx), sol(sol) {
 	  clique.reserve(adj_mtx.size());
-	  std::vector<int> verts;
+	  index_vector verts;
 	  verts.reserve(adj_mtx.size());
-	  for (int i = 0; i < adj_mtx.size(); ++i) {
+	  for (unsigned i = 0; i < adj_mtx.size(); ++i) {
 		verts.emplace_back(i);
 	  }
 	  expand(std::move(verts));
 	}
 
-	std::ostream &print(int depth) {
-	  return std::cout << std::string(2 * depth, ' ');
-	}
-
-	void expand(std::vector<int> verts, int depth = 0) {
-	  print(depth) << " checking(" << depth << ") = {";
-	  for (auto u : verts) {
-		std::cout << u << ",";
-	  }
-	  std::cout << "}\n";
-
+	void expand(index_vector verts) {
 	  while (not verts.empty() && clique.size() + verts.size() > sol.size()) {
-		int v = verts.back();
+		unsigned v = verts.back();
 
-		print(depth) << " num verts: " << verts.size() << " ->  " << v << "\n";
-		clique.emplace_back(v);
-
-		std::vector<vertex_t> new_verts;
-		for (int u : verts) {
-		  print(depth)  << " --> " << v << " adjacent " << u << " = " << adj_mtx.at(v).at(u) << "\n";
+		index_vector new_verts;
+		for (auto u : verts) {
 		  if (adj_mtx.at(v).at(u)) {
 			new_verts.emplace_back(u);
 		  }
 		}
 
+		clique.emplace_back(v);
 		if (new_verts.empty() && clique.size() > sol.size()) {
 		  sol = clique;
-		  print(depth) << "solution: ";
-		  for (auto u : sol) {
-			print(depth) << u << " ";
-		  }
-		  print(depth) << "\n";
 		}
-
 		if (not new_verts.empty()) {
-		  print(depth) << "expand clique of vertex: " << v << "\n";
-		  expand(std::move(new_verts), depth + 1);
+		  expand(std::move(new_verts));
 		}
 
-		clique.erase(std::find(clique.begin(), clique.end(), v));
+		clique.pop_back();
 		verts.pop_back();
 	  }
-	  print(depth) << " checking(" << depth << ")###\n";
-	  char c;
-	  // std::cin >> c;
 	}
   };
 
@@ -129,14 +108,14 @@ struct fahle_max_clique {
 	std::vector<vertex_t> sol_verts, verts = g->vertices();
 	std::transform(sol.begin(), sol.end(),
 				   std::back_inserter(sol_verts),
-				   [&verts](int i) { return verts.at(i); });
+				   [&verts](unsigned i) { return verts.at(i); });
 	return sol_verts;
   }
 
 
 private:
   const graph *g;
-  std::vector<int> sol;
+  index_vector sol;
 };
 
 std::vector<vertex_t> graph::fahle_max_clique() const {
