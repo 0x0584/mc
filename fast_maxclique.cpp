@@ -102,7 +102,7 @@ namespace graph {
                 << std::chrono::duration<double>(end-begin).count() << "s"
                 << " with expected Max Clique " << graph::expected_max_clique_size << "\n\n";
 
-#ifdef LOG
+#if 0
       for (const auto &v : A) {
         std::cout << "Vertex: " << v.first << " { ";
         for (const auto &u : v.second) {
@@ -195,12 +195,18 @@ namespace graph {
 
   private:
     mutable std::mutex print_mtx;
-    void print(const std::string &s, std::size_t thread_id = -1) const {
+    void print(const std::string &s) const {
 #ifdef LOG
       std::scoped_lock print_lock(print_mtx);
-      std::cerr << (thread_id == size_t(-1)
-                    ? ">"
-                    : (std::string((thread_id + 1), ' ') + std::to_string(thread_id)))
+      std::cerr << "> " << s << std::endl;
+      //std::this_thread::sleep_for(0.05s);
+#endif
+    }
+
+    void print(const std::string &s, std::uint32_t thread_id) const {
+#ifdef LOG
+      std::scoped_lock print_lock(print_mtx);
+      std::cerr << std::string((thread_id + 1), ' ') << std::to_string(thread_id)
                 << " " << s << std::endl;
       //std::this_thread::sleep_for(0.05s);
 #endif
@@ -249,30 +255,33 @@ namespace graph {
       std::vector<std::size_t> available_threads;
       available_threads.reserve(num_threads);
 
-      std::mutex max_clique_mtx;
-      std::size_t overall_max_clique_size = max_clique.size();
+      std::size_t local_max_clique_size = max_clique.size();
+      overall_max_clique_size = local_max_clique_size;
 
       std::mutex prune_mtx;
       std::condition_variable apply_prune;
       std::vector<std::size_t> to_prune;
       to_prune.reserve(num_threads);
 
-      const auto valid_vertex = [&, this](std::size_t v) {
-        return v < A.size() && overall_max_clique_size < neighbours_at(v).size();
+      const auto valid_vertex = [&, this](std::size_t v, std::size_t max_clique_size) {
+        return v < A.size() && max_clique_size < neighbours_at(v).size();
       };
 
       /////////////////////////
 
       auto begin = std::chrono::high_resolution_clock::now();
-      for (std::size_t v = 0; valid_vertex(v); available_threads.clear()) {
+      for (std::size_t v = 0; valid_vertex(v, local_max_clique_size); available_threads.clear()) {
         print("waiting...");
-
         std::unique_lock thread_lock(thread_mtx);
         thread_is_available.wait(thread_lock, [&] {
-          bool flag = false;
+          {
+            std::scoped_lock clique_lock(max_clique_mtx);
+            local_max_clique_size = overall_max_clique_size;
+          }
 
+          bool flag = not valid_vertex(v, local_max_clique_size);
           for (std::uint32_t thread_id = 0; thread_id < threads.size()
-                 && valid_vertex(v); ++thread_id) {
+                 && valid_vertex(v, local_max_clique_size); ++thread_id) {
             if (threads[thread_id].available) {
               flag = true;
               available_threads.emplace_back(thread_id);
@@ -284,8 +293,7 @@ namespace graph {
           return flag;
         });
 
-        if (std::scoped_lock clique_lock(max_clique_mtx);
-            (overall_max_clique_size = max_clique.size()) >= upper_bound) {
+        if (local_max_clique_size >= upper_bound) {
           break;
         }
 
@@ -304,8 +312,7 @@ namespace graph {
               std::vector<std::size_t> neighbours;
               neighbours.reserve(neighbours_at(v).size());
               for (const auto &u : neighbours_at(v)) {
-                if (not pruned[u] && neighbours_at(u).size() > overall_max_clique_size
-                    // && neighbours_at(u).size() >= neighbours_at(v).size()
+                if (not pruned[u] && neighbours_at(u).size() > max_clique_size
                     && std::find(to_prune.begin(), to_prune.end(), u) == to_prune.end()) {
                   neighbours.emplace_back(u);
                 }
@@ -325,27 +332,39 @@ namespace graph {
               if (algo_type == algorithms::heuristic) {
                 branch_heuristic(v, neighbours, max_clique_size, clique);
               } else {
-                branch_exact(v, neighbours, max_clique_size, clique, thread_id);
+                uint32_t max_clique_thread = thread_id;
+                branch_exact(v, neighbours, max_clique_size, clique, max_clique_thread, thread_id);
               }
 
-              if (max_clique_size > prev_max_clique_size) {
+              if (clique.size() > prev_max_clique_size) {
                 std::scoped_lock clique_lock(max_clique_mtx);
 #ifdef LOG
                 std::ostringstream oss;
-                oss << (max_clique_size > max_clique.size() ? "found" : "droped")
-                    << " clique for " << A[v].first << " of size=" << max_clique_size << " { ";
-                for (const auto &v : clique) {
-                  oss << A[v].first << " ";
+                oss << (clique.size() > overall_max_clique_size ? "found" : "droped")
+                    << " clique for " << A[v].first << " of size=" << clique.size();
+
+                if (clique.size() == overall_max_clique_size) {
+                  oss << " { ";
+                  for (const auto &v : clique) {
+                    oss << A[v].first << " ";
+                  }
+                  oss << "}";
                 }
-                oss << "}";
                 print(oss.str(), thread_id);
 #endif
 
-                if (max_clique_size > max_clique.size()) {
+                if (clique.size() == overall_max_clique_size) {
                   max_clique = std::move(clique);
+                  overall_max_clique_size = max_clique.size();
                 }
 
               }
+
+              {
+                std::shared_lock thread_lock(thread_mtx);
+                threads[thread_id].available = true;
+              }
+              thread_is_available.notify_one();
 #ifdef LOG
               auto end = std::chrono::high_resolution_clock::now();
               {
@@ -354,13 +373,7 @@ namespace graph {
                           << " took " << std::chrono::duration<double>(end - begin).count() << "s\n";
               }
 #endif
-
-              {
-                std::shared_lock thread_lock(thread_mtx);
-                threads[thread_id].available = true;
-              }
-              thread_is_available.notify_one();
-            }, thread_id, v, overall_max_clique_size, std::vector<std::size_t>(current, to_prune.rend()));
+            }, thread_id, v, local_max_clique_size, std::vector<std::size_t>(current, to_prune.rend()));
         }
 
         {
@@ -390,7 +403,7 @@ namespace graph {
 
     void branch_heuristic(std::size_t v, const std::vector<std::size_t> &neighbours,
                           std::size_t &max_clique_size, std::vector<std::size_t> &clique,
-                          std::size_t depth = 1) const {
+                          std::size_t depth = 1) {
       if (neighbours.empty()) {
         if (depth > max_clique_size) {
           max_clique_size = depth;
@@ -418,18 +431,38 @@ namespace graph {
         // std::cout << clique.size() << "\n";
         clique.emplace_back(v);
       }
+
     }
 
     void branch_exact(std::size_t v, std::vector<std::size_t> &neighbours,
                       std::size_t &max_clique_size, std::vector<std::size_t> &clique,
-                      std::size_t thread_id,
-                      std::size_t depth = 1) const {
+                      std::uint32_t &max_clique_thread, std::uint32_t thread_id,
+                      std::size_t depth = 1) {
       if (neighbours.empty()) {
+        std::size_t old_max_clique_size = max_clique_size;
+        {
+          std::scoped_lock clique_lock(max_clique_mtx);
+          max_clique_size = overall_max_clique_size;
+          if (depth > max_clique_size) {
+            overall_max_clique_size = depth;
+            max_clique_thread = thread_id;
+          }
+        }
+
         if (depth > max_clique_size) {
+          {
+            std::unique_lock print_lock(print_mtx);
+            std::cerr << std::string((thread_id + 1), ' ') <<  thread_id
+                      << " found overall_size=" <<  depth << " old overall_size=" << max_clique_size
+                      << " old local_size=" << old_max_clique_size << "\n";
+          }
+
           max_clique_size = depth;
           clique.clear();
           clique.reserve(depth);
           clique.emplace_back(v);
+
+          print("added vertex " + std::to_string(v) + " at depth=" + std::to_string(depth), thread_id);
         }
         return;
       }
@@ -443,16 +476,18 @@ namespace graph {
 
         auto begin = std::chrono::high_resolution_clock::now();
 
-        branch_exact(u, new_neighbours, max_clique_size, clique, thread_id, depth + 1);
+        branch_exact(u, new_neighbours, max_clique_size, clique, max_clique_thread, thread_id, depth + 1);
 
         auto end = std::chrono::high_resolution_clock::now();
         const double duration = std::chrono::duration<double>(end - begin).count();
         if (duration > .5 && depth == 1) {
           std::unique_lock print_lock(print_mtx);
-          std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " branch of " << A[u].first << " took " << duration << "s\n";
+          std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " branch of "
+                    << A[u].first << " took " << duration << "s\n";
         }
 
-        if (prev_max_clique_size < max_clique_size) {
+        if (prev_max_clique_size < max_clique_size && max_clique_thread == thread_id) {
+          print("added vertex " + std::to_string(v) + " at depth=" + std::to_string(depth), thread_id);
           clique.emplace_back(v);
         }
       }
@@ -498,6 +533,10 @@ namespace graph {
     }
 
     std::vector<std::size_t> max_clique;
+    std::mutex max_clique_mtx;
+    std::size_t overall_max_clique_size = 0;
+
+
     std::vector<std::pair<vertex_t, std::vector<std::size_t>>> A; // Adjacency List
   };
 
@@ -514,20 +553,20 @@ namespace graph {
 int main(int ac, const char *av[]) {
   using namespace graph;
 
-  std::cout << std::fixed << std::setw(6) << std::setprecision(3) << std::left;
-  std::cerr << std::fixed << std::setw(6) << std::setprecision(3) << std::left;
+  std::cout << std::fixed << std::setprecision(3) << std::left;
+  std::cerr << std::fixed << std::setprecision(3) << std::left;
 
   try {
     fast_maxclique fmc;
     std::this_thread::sleep_for(3s);
 
     for (std::size_t num_turns = ac != 1 ? std::atol(av[1]) : -1; num_turns; num_turns--) {
-      std::cout << "Using Heuristic \n";
-      print_clique(fmc.find_maxclique(fast_maxclique::algorithms::heuristic));
+      // std::cout << "Using Heuristic \n";
+      // print_clique(fmc.find_maxclique(fast_maxclique::algorithms::heuristic));
       //std::this_thread::sleep_for(2s);
 
-      std::cout << "Using Hybrid \n";
-      print_clique(fmc.find_maxclique(fast_maxclique::algorithms::hybrid));
+      // std::cout << "Using Hybrid \n";
+      // print_clique(fmc.find_maxclique(fast_maxclique::algorithms::hybrid));
       //std::this_thread::sleep_for(2s);
 
       std::cout << "Using Exact \n";
