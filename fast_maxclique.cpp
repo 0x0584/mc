@@ -1,4 +1,4 @@
-#include <assert.h>
+#include <cassert>
 
 #include <algorithm>
 #include <atomic>
@@ -6,7 +6,9 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <execution>
 #include <map>
+#include <memory_resource>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
@@ -17,6 +19,14 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#ifdef PROFILER
+# include "profiler.h"
+#endif
+
+#ifndef THREADS_PER_CORE
+# define THREADS_PER_CORE 8
+#endif
 
 //#define NDEBUG
 
@@ -37,7 +47,7 @@ struct end_of_scope_executor {
   end_of_scope_executor(const end_of_scope_executor &) = delete;
   end_of_scope_executor(end_of_scope_executor &&) = delete;
 
-  INLINE end_of_scope_executor(Callable &&callback) : callback(std::move(callback)) {}
+  INLINE explicit end_of_scope_executor(Callable &&callback) : callback(std::move(callback)) {}
   INLINE ~end_of_scope_executor() { callback(); }
 
   end_of_scope_executor &operator=(const end_of_scope_executor &) = delete;
@@ -47,13 +57,17 @@ private:
   Callable callback;
 };
 
+INLINE std::size_t percentage(const std::size_t index, const std::size_t size) {
+  return static_cast<std::size_t>((index + 1) * 100 / size);
+}
+
 namespace graph {
   using vertex = unsigned;
   using key = unsigned;
   using size_t = unsigned;
   using colour = unsigned;
 
-  const std::uint32_t threads_per_core = 2;
+  const std::uint32_t threads_per_core = THREADS_PER_CORE;
   const std::uint32_t num_threads = std::thread::hardware_concurrency() * threads_per_core;
 
   struct fast_maxclique {
@@ -69,19 +83,19 @@ namespace graph {
       }
     }
 
-    graph::size_t expected_max_clique_size, num_v, num_e;
-
-    std::vector<graph::key> max_clique;
-    std::vector<std::pair<graph::vertex, std::vector<graph::key>>> adj_lst; // Adjacency List
-    std::vector<std::vector<bool>> adj_mtx; // Adjacency Matrix
-
 #define neighbours_at(index)                    adj_lst[index].second
 
     fast_maxclique() {
+#ifdef PROFILER
+      Profiler::beginSession("Preparing Graph", "load.json");
+#endif
+
       auto begin = std::chrono::high_resolution_clock::now();
 
+#ifdef PROFILER
+      Profiler::InstrumentationTimer timer_reading("Reading from STDIN");
+#endif
       std::cin >> num_v >> num_e >> expected_max_clique_size;
-
       std::unordered_map<graph::vertex, std::set<graph::vertex>> tmp_adj_lst;
       tmp_adj_lst.max_load_factor(0.5);
       tmp_adj_lst.reserve(num_v);
@@ -91,115 +105,54 @@ namespace graph {
         tmp_adj_lst[u].emplace(v);
         tmp_adj_lst[v].emplace(u);
       }
+#ifdef PROFILER
+      timer_reading.stop();
+#endif
+
       assert(tmp_adj_lst.size() == num_v);
 
-      //  ------ sort using neighbour degrees
-      //
-      std::unordered_map<graph::vertex, graph::size_t> tmp_adj_lst_neighbours_degree;
-      tmp_adj_lst_neighbours_degree.max_load_factor(0.5);
-      tmp_adj_lst_neighbours_degree.reserve(num_v);
+#ifdef PROFILER
+      Profiler::InstrumentationTimer timer_sorting("Ordering vertices");
+#endif
+
+      std::unordered_map<graph::vertex, graph::size_t> neighbours_degree;
+      neighbours_degree.max_load_factor(0.5);
+      neighbours_degree.reserve(num_v);
       for (const auto &[v, neighbours] : tmp_adj_lst) {
         for (const auto &u : neighbours) {
-          tmp_adj_lst_neighbours_degree[v] += tmp_adj_lst[u].size();
+          neighbours_degree[v] += tmp_adj_lst[u].size();
         }
       }
-
-      //  ------ sort using core numbers
-      //
-      // std::unordered_map<graph::vertex, size_t> tmp_adj_lst_cores;
-      // tmp_adj_lst_cores.max_load_factor(0.5);
-      // tmp_adj_lst_cores.reserve(num_v);
-      // for (const auto &[v, neighbours] : tmp_adj_lst) {
-      //   tmp_adj_lst_cores[v] = neighbours.size();
-      // }
-
-      // {
-      //   size_t todo = tmp_adj_lst_cores.size();
-      //   for (size_t level = 1; todo; ++level) {
-      //     std::vector<graph::vertex> curr;
-      //     curr.reserve(tmp_adj_lst_cores.size());
-
-      //     for (const auto &[v, degree] : tmp_adj_lst_cores) {
-      //       if (degree == level) {
-      //         curr.emplace_back(v);
-      //       }
-      //     }
-
-      //     for (std::vector<graph::vertex> next; not curr.empty(); curr = std::move(next)) {
-      //       todo -= curr.size();
-      //       next.reserve(curr.size());
-      //       for (const auto &v : curr) {
-      //         for (const auto &u : tmp_adj_lst[v]) {
-      //           if (auto &k = tmp_adj_lst_cores[u]; k > level && --k == level) {
-      //             next.emplace_back(u);
-      //           }
-      //         }
-      //       }
-      //     }
-      //   }
-      // }
-
       std::vector<std::pair<graph::vertex, std::set<graph::vertex>>> adj_lst_orig;
       adj_lst_orig.reserve(num_v);
       for (auto &v : tmp_adj_lst) {
         adj_lst_orig.emplace_back(std::make_pair(v.first, std::move(v.second)));
       }
-
-      //  ------ sort using neighbour degrees
-      //
-      std::sort(adj_lst_orig.begin(), adj_lst_orig.end(),
-                [&](const std::pair<graph::vertex, std::set<graph::vertex>> &u,
-                    const std::pair<graph::vertex, std::set<graph::vertex>> &v) {
+      std::sort(std::execution::par_unseq, adj_lst_orig.begin(), adj_lst_orig.end(),
+                [&](const std::pair<graph::vertex, std::set<graph::vertex>> &v,
+                    const std::pair<graph::vertex, std::set<graph::vertex>> &u) {
                   return (u.second.size() < v.second.size() ||
                           (u.second.size() == v.second.size() &&
-                           tmp_adj_lst_neighbours_degree.at(u.first) < tmp_adj_lst_neighbours_degree.at(v.first)));
+                           neighbours_degree.at(u.first) < neighbours_degree.at(v.first)));
                 });
-
-
-
-      //  ------ sort using cores
-      //
-      // std::sort(adj_lst_orig.begin(), adj_lst_orig.end(),
-      //           [&](const std::pair<graph::vertex, std::set<graph::vertex>> &u,
-      //               const std::pair<graph::vertex, std::set<graph::vertex>> &v) {
-      //             const auto &u_core = tmp_adj_lst_cores.at(u.first),
-      //               &v_core = tmp_adj_lst_cores.at(v.first);
-      //             const auto &u_degree = u.second.size(),
-      //               &v_degree = v.second.size();
-      //             const auto &u_neighbours_degree = tmp_adj_lst_neighbours_degree.at(u.first),
-      //               &v_neighbours_degree = tmp_adj_lst_neighbours_degree.at(v.first);
-
-      //             // return (u_degree < v_degree ||
-      //             //         (u_degree == v_degree && u_neighbours_degree < v_neighbours_degree) ||
-      //             //         (u_degree == v_degree && u_neighbours_degree == v_neighbours_degree &&
-      //             //          u_cores < v_cores) ||
-      //             //         (u_degree == v_degree && u_neighbours_degree == v_neighbours_degree &&
-      //             //          u_cores == v_cores && u < v));
-      //             return u_core < v_core || ( u_core == v_core && u_degree < v_degree) ||
-      //               ( u_core == v_core && u_degree == v_degree &&
-      //                 u_neighbours_degree < v_neighbours_degree);
-      //           });
-
-
-      //  ------ sort using vertex degrees
-      //
-      // std::sort(adj_lst_orig.begin(), adj_lst_orig.end(),
-      //           [&](const std::pair<graph::vertex, std::set<graph::vertex>> &u,
-      //               const std::pair<graph::vertex, std::set<graph::vertex>> &v) {
-      //             return u.second.size() < v.second.size();
-      //           });
+#ifdef PROFILER
+      timer_sorting.stop();
+      Profiler::InstrumentationTimer timer_adj_lst("Creating Adjacency List");
+#endif
 
       std::unordered_map<graph::vertex, graph::key> reversed_mapping;
+      reversed_mapping.max_load_factor(0.5);
       reversed_mapping.reserve(num_v);
+
       adj_lst.reserve(num_v);
       adj_mtx.reserve(num_v);
       for (const auto &v : adj_lst_orig) {
         reversed_mapping.emplace(v.first, adj_lst.size());
+
         adj_mtx.emplace_back(std::vector<bool>(num_v));
         adj_lst.emplace_back(std::make_pair(v.first, std::vector<graph::key>{}));
         adj_lst.back().second.reserve(v.second.size());
       }
-
 
       for (const auto &[v, neighbours_orig] : adj_lst_orig) {
         const graph::key &v_key = reversed_mapping.at(v);
@@ -213,10 +166,17 @@ namespace graph {
         std::sort(neighbours.begin(), neighbours.end());
       }
 
+#ifdef PROFILER
+      timer_adj_lst.stop();
+#endif
+
       auto end = std::chrono::high_resolution_clock::now();
       std::cout << "Graph (vertices=" << num_v << " edges=" << num_e
                 << ") with expected maxlique=" << expected_max_clique_size
-                << " was read in " << std::chrono::duration<double>(end-begin).count() << "s\n";
+                << " was read in " << std::chrono::duration<double>(end-begin).count() << "s\n\n";
+#ifdef PROFILER
+      Profiler::endSession();
+#endif
 
 #if 0//def LOG
       for (const auto &v : adj_lst) {
@@ -253,14 +213,20 @@ namespace graph {
       }
       std::cerr << "\n";
 #endif
-
+#ifdef LOG
       std::this_thread::sleep_for(3s);
-
+#endif
     }
 
     std::vector<graph::vertex>
     find_maxclique(algorithms algo_type = algorithms::exact, graph::size_t upper_bound = -1u) {
+#ifdef PROFILER
+      Profiler::beginSession("Max Clique", "solution.json");
+#endif
       solution(algo_type, upper_bound);
+#ifdef PROFILER
+      Profiler::endSession();
+#endif
 
       std::vector<graph::vertex> clique;
       clique.reserve(max_clique.size());
@@ -286,11 +252,20 @@ namespace graph {
 
       max_clique.clear();
       overall_max_clique_size = 0;
+      end_of_search = false;
+      owner_thread_id = -1u;
 
       return clique;
     }
 
   private:
+
+    std::vector<graph::key> max_clique;
+    std::vector<std::pair<graph::vertex, std::vector<graph::key>>> adj_lst; // Adjacency List
+    std::vector<std::vector<bool>> adj_mtx; // Adjacency Matrix
+
+    graph::size_t expected_max_clique_size, num_v, num_e;
+
 #ifdef LOG
     mutable std::mutex print_mtx;
     void print(const std::string &s) const {
@@ -305,99 +280,6 @@ namespace graph {
     }
 #endif
 
-    struct thread_wrapper {
-      std::thread th;
-      bool available = true;
-
-      ~thread_wrapper() {
-        if (th.joinable()) {
-          th.join();
-        }
-      }
-
-      thread_wrapper &operator=(std::thread &&rhs) {
-        if (not available) {
-          throw std::runtime_error("Thread is still running");
-        }
-        available = false;
-        if (th.joinable()) {
-          th.join();
-        }
-        th = std::move(rhs);
-        return *this;
-      }
-    };
-
-    INLINE graph::size_t num_colours_greedy(const std::vector<graph::key> &S) const {
-      std::unordered_set<graph::colour> C;
-      std::unordered_map<graph::key, graph::colour> L;
-
-      L.max_load_factor(0.5);
-      L.reserve(S.size());
-      C.max_load_factor(0.5);
-      C.reserve(S.size());
-
-      for (const auto &v : S) {
-        std::set<graph::colour> N_C;
-        for (const auto &w : S) {
-          for (const auto &u : neighbours_at(v)) {
-            if (u == w) {
-              N_C.emplace(L[u]);
-              break;
-            }
-          }
-        }
-        N_C.erase(0);
-
-        graph::colour colour = 1;
-        for (const auto &c : N_C) {
-          if (c != colour) {
-            break;
-          }
-          colour++;
-        }
-
-        L[v] = colour;
-        C.emplace(colour);
-      }
-
-      return C.size();
-    }
-
-    INLINE std::vector<graph::key> core_numbers(std::vector<graph::key> K) {
-      graph::size_t todo = K.size();
-      for (graph::size_t v = 0; v < K.size(); ++v) {
-        if (K[v] == 0) {
-          todo--;
-        }
-      }
-
-      for (graph::size_t level = 1; todo; ++level) {
-        std::vector<graph::key> curr;
-        curr.reserve(K.size());
-
-        for (graph::key v = 0; v < K.size(); ++v) {
-          if (K[v] == level) {
-            curr.emplace_back(v);
-          }
-        }
-
-        for (std::vector<graph::key> next; not curr.empty(); curr = std::move(next)) {
-          todo -= curr.size();
-          next.reserve(curr.size());
-          for (const auto &v : curr) {
-            for (const auto &u : neighbours_at(v)) {
-              if (K[u] > level && --K[u] == level) {
-                next.emplace_back(u);
-              }
-            }
-          }
-        }
-      }
-
-      return K;
-    }
-
     std::vector<graph::size_t> degrees() const {
       std::vector<graph::size_t> D;
       D.reserve(num_v);
@@ -407,8 +289,15 @@ namespace graph {
       return D;
     }
 
-    INLINE std::unordered_map<graph::key, graph::colour>
-    sort_vertices_by_colour(std::vector<graph::key> &neighbours, const std::uint32_t thread_id) const {
+    INLINE std::vector<graph::colour>
+    sort_vertices_by_colour(std::vector<graph::key> &neighbours) const {
+      if (neighbours.empty()) {
+        return {};
+      }
+
+#ifdef PROFILER
+      Profiler::InstrumentationTimer timer_thread(std::string("Colouring Vertices"));
+#endif
       std::vector<std::vector<graph::key>> colour_classes;
       colour_classes.resize(neighbours.size());
       for (auto &colour_class : colour_classes) {
@@ -423,20 +312,17 @@ namespace graph {
           colour++;
         }
         colour_classes[colour].emplace_back(v);
-        if (colour >= num_colours)
-          num_colours = colour + 1;
+        num_colours = std::max(num_colours, colour + 1);
       }
-      // print("colouring " + std::to_string(neighbours.size()) + " vertices with "
-      //       + std::to_string(num_colours) + " colours", thread_id);
 
       neighbours.clear();
 
-      std::unordered_map<graph::key, graph::colour> colours;
-      colours.max_load_factor(0.5);
+      std::vector<graph::colour> colours;
       colours.reserve(neighbours.size());
+
       for (graph::colour colour = 0; colour < num_colours; ++colour) {
         for (const auto &v : colour_classes[colour]) {
-          colours.emplace(v, colour + 1);
+          colours.emplace_back(colour + 1);
           neighbours.emplace_back(v);
         }
       }
@@ -444,9 +330,12 @@ namespace graph {
       return colours;
     }
 
-    mutable std::shared_mutex max_clique_mtx;
-    mutable graph::size_t overall_max_clique_size = 0;
+    std::shared_mutex max_clique_mtx;
+    graph::size_t overall_max_clique_size = 0;
+    std::atomic_bool end_of_search = false;
+    std::uint32_t owner_thread_id = -1u;
     void solution(algorithms algo_type, graph::size_t upper_bound) {
+
       if (algo_type == algorithms::hybrid) {
         solution(algorithms::heuristic, upper_bound);
         if (overall_max_clique_size >= upper_bound) {
@@ -455,33 +344,20 @@ namespace graph {
       }
 
       std::vector<graph::size_t> D = degrees();
-      std::vector<graph::size_t> K = core_numbers(D);
-      if (algo_type == algorithms::hybrid) {
-        for (graph::key v = 0; v < num_v; ++v) {
-          if (K[v] < overall_max_clique_size) {
-            for (const auto &u : neighbours_at(v)) {
-              if (D[u]) {
-                D[u]--;
-              }
-            }
-            K[v] = D[v] = 0;
-          }
-        }
-        K = core_numbers(D);
-      }
 
       ///////////////////////
 
       std::shared_mutex thread_mtx;
-      std::condition_variable_any thread_is_available;
-      std::vector<thread_wrapper> threads(num_threads);
-      std::uint32_t owner_thread_id = -1u;
+      std::condition_variable_any thread_pool;
+      std::vector<std::thread> threads(num_threads);
+      std::vector<bool> available(num_threads, true);
 
       std::mutex read_mtx;
       std::condition_variable reading_is_complete;
       bool reading = false;
 
-      std::atomic_bool end_of_search = false;
+      end_of_search = false;
+      owner_thread_id = -1u;
 
       /////////////////////////
 
@@ -490,35 +366,43 @@ namespace graph {
       auto percent_begin = std::chrono::high_resolution_clock::now();
       graph::size_t old_max_clique_size = overall_max_clique_size;
 #endif
-
+#ifdef PROFILER
+      Profiler::InstrumentationTimer timer_loop("Looping over vertices");
+#endif
       std::vector<graph::key> vertices;
       vertices.reserve(num_v);
       for (graph::key v = 0; v < num_v; ++v) {
-        if (D[v] != 0) {
-          vertices.emplace_back(v);
-        }
+        vertices.emplace_back(v);
       }
 
-      std::unordered_map<graph::key, graph::colour> colours = sort_vertices_by_colour(vertices, 0);
-      for (auto itr = vertices.rbegin(); itr != vertices.rend();) {
+      while (not vertices.empty() && not end_of_search) {
+        const std::size_t percent = num_v - vertices.size();
+
 #ifdef LOG
-        print("waiting... " + std::to_string(((std::distance(vertices.rbegin(), itr) + 1) * 100 / vertices.size())) + "%");
+        print("waiting... " + std::to_string(percentage(percent, num_v)) + "%");
+#else
+        auto percent_end = std::chrono::high_resolution_clock::now();
+        if (std::chrono::duration<double>(percent_end - percent_begin).count() >= 1.) {
+          std::cerr << percentage(percent, num_v) << "% "
+                    << std::chrono::duration<double>(percent_end - begin).count() << "s\n";
+        }
+        percent_begin = std::chrono::high_resolution_clock::now();
 #endif
 
-        //{
-        std::unique_lock thread_lock(thread_mtx);
-        thread_is_available.wait(thread_lock, [&] {
-          return std::any_of(threads.begin(), threads.end(), [](const auto &th) {
-            return th.available;
+        std::vector<graph::colour> colours = sort_vertices_by_colour(vertices);
+        {
+          std::unique_lock thread_lock(thread_mtx);
+          thread_pool.wait(thread_lock, [&] {
+            return std::any_of(available.begin(), available.end(), [](bool th) { return th; });
           });
-        });
-        //}
+        }
 
         graph::size_t current_max_clique_size;
         {
           std::shared_lock clique_lock(max_clique_mtx);
           current_max_clique_size = overall_max_clique_size;
         }
+
         if (current_max_clique_size >= upper_bound) {
           break;
         }
@@ -527,51 +411,64 @@ namespace graph {
         print("new thread(s) available! max_clique=" + std::to_string(current_max_clique_size));
 #else
         if (old_max_clique_size != current_max_clique_size) {
-          std::cerr << " clique_size=" << current_max_clique_size << "\n";
+          std::cerr << " max_clique=" << current_max_clique_size << "\n";
           old_max_clique_size = current_max_clique_size;
         }
 #endif
-        for (std::uint32_t thread_id = 0; thread_id < threads.size() && itr != vertices.rend(); ++thread_id) {
-          if (threads[thread_id].available) {
-            const graph::key v = *itr++;
-            if (colours[v] <= current_max_clique_size) {
+
+        for (std::uint32_t thread_id = 0; thread_id < threads.size() && not vertices.empty() && not end_of_search; ++thread_id) {
+
+          if (available[thread_id]) {
+            available[thread_id] = false;
+            if (threads[thread_id].joinable()) {
+              threads[thread_id].join();
+            }
+
+            if (colours.back() <= current_max_clique_size) {
               end_of_search = true;
 #ifdef LOG
               print("end of search max_clique=" + std::to_string(current_max_clique_size));
+#else
+              std::cerr << "end of search\n";
 #endif
               break;
             }
 
+            const graph::key v = vertices.back();
+            vertices.pop_back();
+            colours.pop_back();
+
             reading = true;
             threads[thread_id] = std::thread([&, this](const std::uint32_t thread_id, const graph::key v,
                                                        graph::size_t max_clique_size) {
-              end_of_scope_executor set_thread_available([&threads, &thread_id,
-                                                          &thread_mtx, &thread_is_available] {
+              end_of_scope_executor set_thread_available([&available, &thread_id,
+                                                          &thread_mtx, &thread_pool] {
                 {
                   std::shared_lock thread_lock(thread_mtx);
-                  threads[thread_id].available = true;
+                  available[thread_id] = true;
                 }
-                thread_is_available.notify_one();
+                thread_pool.notify_one();
               });
 
-              std::unordered_map<graph::key, graph::size_t> K_;
+#ifdef PROFILER
+              Profiler::InstrumentationTimer timer_thread(std::string("Branching on ") + std::to_string(v));
+              Profiler::InstrumentationTimer timer_vertex_reading(std::string("Reading neighbour vertices of ")
+                                                                  + std::to_string(v));
+#endif
+
               std::vector<graph::key> neighbours;
-              K_.max_load_factor(0.5);
-              K_.reserve(D[v]);
               neighbours.reserve(D[v]);
 
-              graph::size_t max_core = K[v];
               for (const auto &u : neighbours_at(v)) {
                 if (D[u] != 0) {
-                  if (K[u] >= max_clique_size) {
-                    K_.emplace(u, K[u]);
-                    neighbours.emplace_back(u);
-                    max_core = std::max(max_core, K[u]);
-                  }
-                  --D[u];
+                  neighbours.emplace_back(u);
                 }
               }
               D[v] = 0;
+
+#ifdef PROFILER
+              timer_vertex_reading.stop();
+#endif
 
               {
                 std::scoped_lock reading_lock(read_mtx);
@@ -579,102 +476,96 @@ namespace graph {
               }
               reading_is_complete.notify_one();
 
-              if (max_core >= max_clique_size && neighbours.size() >= max_clique_size) {
+              if (neighbours.empty()) {
 #ifdef LOG
-                print(std::string("branching on ") + std::to_string(adj_lst[v].first)
-                      + " with " + std::to_string(neighbours.size()) + " neighbours"
-                      //+ " Core=" +  std::to_string(max_core)
-                      , thread_id);
-                auto begin = std::chrono::high_resolution_clock::now();
+                print(std::string("vertex ") + std::to_string(adj_lst[v].first) + " has no neighbours. abort");
 #endif
-
-                std::vector<graph::key> clique;
-                if (algo_type == algorithms::heuristic) {
-                  std::sort(neighbours.begin(), neighbours.end(),
-                            [&](const std::size_t &u, const std::size_t &v) {
-                              return K_.at(u) < K_.at(v);
-                            });
-                  branch_heuristic(v, neighbours, owner_thread_id, thread_id, max_clique_size, clique, K_, end_of_search);
-                } else {
-                  branch_exact(v, neighbours, owner_thread_id, thread_id, max_clique_size, clique, K_, end_of_search);
-                }
-
-                if (std::scoped_lock clique_lock(max_clique_mtx);
-                    clique.size() > max_clique.size() && thread_id == owner_thread_id) {
-#ifdef LOG
-                  std::ostringstream oss;
-                  oss << "found clique for " << adj_lst[v].first << " of size=" << clique.size() << " { ";
-                  for (const auto &u : clique) {
-                    oss << adj_lst[u].first << " ";
-                  }
-                  oss << "}";
-                  print(oss.str(), thread_id);
-#endif
-                  max_clique = std::move(clique);
-                  overall_max_clique_size = max_clique.size();
-                }
-
-#ifdef LOG
-                auto end = std::chrono::high_resolution_clock::now();
-                {
-                  std::scoped_lock print_lock(print_mtx);
-                  std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " done with " << adj_lst[v].first
-                            << " took " << std::chrono::duration<double>(end - begin).count() << "s\n";
-                }
-#endif
-
+                end_of_search = true;
+                return;
               }
+
+              std::vector<graph::colour> colours = sort_vertices_by_colour(neighbours);
+              if (colours.back() < max_clique_size) {
+#ifdef LOG
+                print(std::string("vertex ") + std::to_string(adj_lst[v].first) + " has fewer colours. abort");
+#endif
+                end_of_search = true;
+
+                return;
+              }
+
+#ifdef LOG
+              print(std::string("branching on ") + std::to_string(adj_lst[v].first)
+                    + " with " + std::to_string(neighbours.size()) + " neighbours and "
+                    + std::to_string(colours.back()) + " colours",
+                    thread_id);
+              auto begin = std::chrono::high_resolution_clock::now();
+#endif
+
+              std::vector<graph::key> clique;
+              std::size_t num_nodes = 0;
+              if (algo_type == algorithms::heuristic) {
+                branch_heuristic(thread_id, v, neighbours, clique, max_clique_size, num_nodes);
+              } else {
+                branch_exact(thread_id, v, neighbours, colours, clique, max_clique_size, num_nodes);
+              }
+
+              if (std::scoped_lock clique_lock(max_clique_mtx);
+                  clique.size() > max_clique.size() && thread_id == owner_thread_id) {
+#ifdef LOG
+                std::ostringstream oss;
+                oss << "found clique for " << adj_lst[v].first << " of size=" << clique.size() << " { ";
+                for (const auto &u : clique) {
+                  oss << adj_lst[u].first << " ";
+                }
+                oss << "}";
+                print(oss.str(), thread_id);
+#endif
+                max_clique = std::move(clique);
+                overall_max_clique_size = max_clique.size();
+              }
+
+#ifdef LOG
+              auto end = std::chrono::high_resolution_clock::now();
+              {
+                std::scoped_lock print_lock(print_mtx);
+                std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " done with " << adj_lst[v].first
+                          << " after " << num_nodes << " branches took "
+                          << std::chrono::duration<double>(end - begin).count() << "s\n";
+              }
+#endif
             }, thread_id, v, current_max_clique_size);
 
             std::unique_lock reading_lock(read_mtx);
             reading_is_complete.wait(reading_lock, [&reading]() {
               return not reading;
             });
-
-            K = core_numbers(D);
           }
         }
-
-        if (end_of_search) {
-          break;
-        }
-
-#ifndef LOG
-        auto percent_end = std::chrono::high_resolution_clock::now();
-        if (std::chrono::duration<double>(percent_end - percent_begin).count() >= 1.) {
-          std::cerr << ((std::distance(vertices.rbegin(), itr) + 1) * 100 / vertices.size()) << "% "
-                    << std::chrono::duration<double>(percent_end - begin).count() << "s\n";
-        }
-        percent_begin = std::chrono::high_resolution_clock::now();
-#endif
       }
 
 #ifdef LOG
-      print("stopped making threads\n");
+      print("stopped making threads");
 #endif
-      threads.clear();
-
+      for (auto &th : threads) {
+        if (th.joinable()) {
+          th.join();
+        }
+      }
       auto end = std::chrono::high_resolution_clock::now();
 #ifdef LOG
-      std::cerr << "\n> all threads joined\n\n";
+      std::cerr << "> all threads joined\n\n";
 #endif
       std::cout << "Clique is found using " << algo_type << " in "
                 << std::chrono::duration<double>(end - begin).count() << "s\n";
     }
 
-    INLINE bool max_clique_found(std::vector<graph::key> &clique,
-                                 std::uint32_t &owner_thread_id, const std::uint32_t thread_id,
-                                 graph::size_t &max_clique_size, const graph::size_t depth) const {
+    INLINE bool enlarge_clique_size(const std::uint32_t thread_id, graph::size_t &max_clique_size, const graph::size_t depth) {
       bool found = false;
 
       {
         std::shared_lock clique_shared_lock(max_clique_mtx);
         if (depth > overall_max_clique_size) {
-
-#ifdef LOG
-          auto begin = std::chrono::high_resolution_clock::now();
-#endif
-
           clique_shared_lock.unlock();
           {
             std::scoped_lock clique_lock(max_clique_mtx);
@@ -690,11 +581,10 @@ namespace graph {
           found = owner_thread_id == thread_id;
 
 #ifdef LOG
-          auto end = std::chrono::high_resolution_clock::now();
           {
             std::scoped_lock print_lock(print_mtx);
-            std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " clique update to "
-                      << overall_max_clique_size << " took " << std::chrono::duration<double>(end - begin).count() << "s\n";
+            std::cerr << std::string((thread_id + 1), ' ') <<  thread_id << " enlarged clique to "
+                      << overall_max_clique_size << "\n";
           }
 #endif
 
@@ -702,92 +592,92 @@ namespace graph {
         max_clique_size = overall_max_clique_size;
       }
 
-      if (found) {
-        clique.clear();
-        clique.reserve(depth);
-      }
-
       return found;
     }
 
-    void branch_heuristic(const graph::key v, const std::vector<graph::key> &neighbours,
-                          std::uint32_t &owner_thread_id, const std::uint32_t thread_id,
-                          graph::size_t &max_clique_size, std::vector<graph::key> &clique,
-                          const std::unordered_map<graph::key, graph::size_t> &K_,
-                          const std::atomic_bool &end_of_search,
-                          const graph::size_t depth = 1) const {
-      if (end_of_search && owner_thread_id != thread_id) {
-        return;
-      }
-      if (neighbours.empty()) {
-        if (max_clique_found(clique, owner_thread_id, thread_id, max_clique_size, depth)) {
-          clique.emplace_back(v);
-        }
-        return;
+    void branch_heuristic(const std::uint32_t thread_id, const graph::key v,
+                          std::vector<graph::key> &neighbours, std::vector<graph::key> &clique,
+                          graph::size_t &max_clique_size, std::size_t &num_nodes,
+                          const graph::size_t depth = 1) {
+      num_nodes++;
+
+      {
+        std::shared_lock clique_shared_lock(max_clique_mtx);
+        max_clique_size = overall_max_clique_size;
       }
 
-      const graph::key v_max = neighbours.back();
-      const graph::size_t prev_max_clique_size = max_clique_size;
-      branch_heuristic(v_max, vertex_neighbourhood(v_max, neighbours, max_clique_size, K_),
-                       owner_thread_id, thread_id, max_clique_size, clique, K_, end_of_search, depth + 1);
-      if (end_of_search && owner_thread_id != thread_id) {
-        return;
+      const graph::size_t next_depth = depth + 1;
+      graph::size_t prev_max_clique_size = max_clique_size;
+      graph::key u = neighbours.back();
+      neighbours.pop_back();
+
+      std::vector<graph::key> new_neighbours = vertex_neighbourhood(u, neighbours);
+      if (new_neighbours.empty()) {
+        if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
+          clique.clear();
+          clique.reserve(next_depth);
+          clique.emplace_back(u);
+        }
+      } else {
+        branch_heuristic(thread_id, u, new_neighbours, clique, max_clique_size, num_nodes, next_depth);
       }
-      if (prev_max_clique_size < max_clique_size && owner_thread_id == thread_id) {
+      if (owner_thread_id == thread_id && prev_max_clique_size < max_clique_size) {
         clique.emplace_back(v);
       }
     }
 
-    void branch_exact(const graph::key v, std::vector<graph::key> &neighbours,
-                      std::uint32_t &owner_thread_id, const std::uint32_t thread_id,
-                      graph::size_t &max_clique_size, std::vector<graph::key> &clique,
-                      const std::unordered_map<graph::key, graph::size_t> &K_,
-                      const std::atomic_bool &end_of_search,
-                      const graph::size_t depth = 1) const {
-      if (end_of_search && owner_thread_id != thread_id) {
-        return;
+    void branch_exact(const std::uint32_t thread_id, const graph::key v,
+                      std::vector<graph::key> &neighbours, std::vector<graph::colour> &colours,
+                      std::vector<graph::key> &clique, graph::size_t &max_clique_size,
+                      std::size_t &num_nodes, const graph::size_t depth = 1) {
+      num_nodes++;
+
+      {
+        std::shared_lock clique_shared_lock(max_clique_mtx);
+        max_clique_size = overall_max_clique_size;
       }
 
-      if (neighbours.empty()) {
-        if (max_clique_found(clique, owner_thread_id, thread_id, max_clique_size, depth)) {
-          clique.emplace_back(v);
-        }
-        return;
-      }
+      const graph::size_t next_depth = depth + 1;
+      while (not neighbours.empty() && depth + colours.back() > max_clique_size) {
+        graph::size_t prev_max_clique_size = max_clique_size;
 
-      //if (thread_id == 1) {
-      //print(" beginning at depth " + std::to_string(depth) + " with " + std::to_string(neighbours.size()), thread_id);
-         //}
-      std::unordered_map<graph::key, graph::colour> colours = sort_vertices_by_colour(neighbours, thread_id);
-      while (not neighbours.empty() && depth + colours.at(neighbours.back()) > max_clique_size) {
-        const graph::key u = neighbours.back();
+        graph::key u = neighbours.back();
         neighbours.pop_back();
+        colours.pop_back();
 
-        std::vector<graph::key> new_neighbours = vertex_neighbourhood(u, neighbours, max_clique_size, K_);
-        const graph::size_t prev_max_clique_size = max_clique_size;
-        branch_exact(u, new_neighbours, owner_thread_id, thread_id, max_clique_size, clique, K_, end_of_search, depth + 1);
-        if (end_of_search && owner_thread_id != thread_id) {
-          return;
+        std::vector<graph::key> new_neighbours = vertex_neighbourhood(u, neighbours);
+
+        if (new_neighbours.empty()) {
+          if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
+            clique.clear();
+            clique.reserve(next_depth);
+            clique.emplace_back(u);
+          }
+        } else {
+          std::vector<graph::colour> new_colours = sort_vertices_by_colour(new_neighbours);
+          if (next_depth + new_colours.back() > max_clique_size) {
+            branch_exact(thread_id, u, new_neighbours, new_colours, clique, max_clique_size, num_nodes, next_depth);
+          }
         }
-        if (prev_max_clique_size < max_clique_size && thread_id == owner_thread_id) {
+
+        if (owner_thread_id == thread_id && prev_max_clique_size < max_clique_size) {
           clique.emplace_back(v);
         }
+
       }
-      // if (thread_id == 1) {
-      // print(" done with depth " + std::to_string(depth), thread_id);
-      // }
     }
 
     INLINE std::vector<graph::key>
-    vertex_neighbourhood(const graph::key w, const std::vector<graph::key> &neighbours,
-                         const graph::size_t max_clique_size,
-                         const std::unordered_map<graph::key, graph::size_t> &K_) const {
+    vertex_neighbourhood(const graph::key v, const std::vector<graph::key> &neighbours) const {
+#ifdef PROFILER
+      Profiler::InstrumentationTimer timer_neighbourhood("Inducing The Neighbourhood");
+#endif
+
       std::vector<graph::key> new_neighbours;
       new_neighbours.reserve(neighbours.size());
 
-      for (const auto &u : neighbours) {
-        if (std::binary_search(neighbours_at(w).begin(), neighbours_at(w).end(), u)
-            && K_.at(u) >= max_clique_size) {
+      for (graph::key u : neighbours) {
+        if (adj_mtx[v][u]) {
           new_neighbours.emplace_back(u);
         }
       }
@@ -825,23 +715,35 @@ int main(int ac, const char *av[]) {
   std::cout << std::fixed << std::setprecision(3) << std::left;
   std::cerr << std::fixed << std::setprecision(3) << std::left;
 
+#ifdef LOG
+  const auto hold_time = 0s;
+#endif
+
+  std::cout << "Num Threads " << num_threads << "\n";
+
   try {
     fast_maxclique fmc;
     //std::this_thread::sleep_for(3s);
 
     std::size_t num_turns = ac != 1 ? std::size_t(std::atol(av[1])) : -1u;
     while (num_turns--) {
-      std::cout << "Using Heuristic \n";
-      print_clique(fmc.find_maxclique(fast_maxclique::algorithms::heuristic));
-      //std::this_thread::sleep_for(2s);
+      // std::cout << "Using Heuristic \n";
+      // print_clique(fmc.find_maxclique(fast_maxclique::algorithms::heuristic));
+#ifdef LOG
+      std::this_thread::sleep_for(hold_time);
+#endif
 
-      std::cout << "Using Hybrid \n";
-      print_clique(fmc.find_maxclique(fast_maxclique::algorithms::hybrid));
-      //std::this_thread::sleep_for(2s);
+      // std::cout << "Using Hybrid \n";
+      // print_clique(fmc.find_maxclique(fast_maxclique::algorithms::hybrid));
+#ifdef LOG
+      std::this_thread::sleep_for(hold_time);
+#endif
 
       std::cout << "Using Exact \n";
       print_clique(fmc.find_maxclique(fast_maxclique::algorithms::exact));
-      //std::this_thread::sleep_for(2s);
+#ifdef LOG
+      std::this_thread::sleep_for(hold_time);
+#endif
     }
   } catch (const std::exception &e) {
     std::cout << e.what() << "\n";
