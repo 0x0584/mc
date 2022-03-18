@@ -61,7 +61,7 @@ graph::adjacency_list() const {
 
 bool graph::add_vertex(vertex_t v) {
   if (edges.find(v) == edges.end()) {
-    edges.emplace(v);
+    edges.emplace(v, std::vector<vertex_t>{});
     return true;
   }
   return false;
@@ -223,7 +223,7 @@ struct tomita_max_clique {
   }
 
   std::vector<vertex_t> solution() {
-
+      return {};
   }
 
 private:

@@ -2,3 +2,7 @@
 build
 *.col
 *.clq
+*.mtx
+*.dSYM
+*~
+\#*\#
