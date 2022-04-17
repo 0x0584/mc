@@ -5,8 +5,8 @@ RELEASE			?= 1
 
 THREADS_PER_CORE ?= 8
 
-CXX				= clang++-13
-CPPFLAGS		= -std=c++17 -stdlib=macports-libstdc++ -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
+CXX				?= g++
+CPPFLAGS		+= -std=c++17 -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
 					-Wctor-dtor-privacy -Wdisabled-optimization -Wformat=2 -Winit-self -Wmissing-declarations \
 					-Wmissing-include-dirs -Wold-style-cast -Woverloaded-virtual -Wredundant-decls -Wshadow \
 					-Wsign-conversion -Wsign-promo -Wstrict-overflow=5 -Wswitch-default -Wundef -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
@@ -30,5 +30,3 @@ ifeq ($(RELEASE),1)
 else
 	CPPFLAGS += -Og -g
 endif
-
-
