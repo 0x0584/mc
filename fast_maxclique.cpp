@@ -1,20 +1,18 @@
 #include <cassert>
-#include <pthread.h>
 #include <cstring>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <execution>
 #include <functional>
 #include <iomanip>
 #include <iostream>
-#include <execution>
 #include <map>
 #include <memory_resource>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
-#include <sstream>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -32,6 +30,8 @@
 # include "profiler.h"
 #endif
 
+#define MAX_THREADS_PER_CORE 32
+
 #ifndef THREADS_PER_CORE
 # define THREADS_PER_CORE 8
 #endif
@@ -39,17 +39,6 @@
 //#define NDEBUG
 
 using namespace std::chrono_literals;
-
-namespace thread {
-  void set_priority(std::thread &th, int policy, int priority) {
-    sched_param sch_params;
-    sch_params.sched_priority = priority;
-    if (pthread_setschedparam(th.native_handle(), policy, &sch_params)) {
-      std::cerr << "Failed to set Thread scheduling : " << std::strerror(errno) << std::endl;
-      exit(-1);
-    }
-  }
-}
 
 #if defined(__clang__) || defined(__GNUC__) || defined(__GNUG__)
 # define INLINE __attribute__ ((always_inline)) inline
@@ -66,7 +55,7 @@ struct end_of_scope_executor {
   end_of_scope_executor(const end_of_scope_executor &) = delete;
   end_of_scope_executor(end_of_scope_executor &&) = delete;
 
-    INLINE explicit end_of_scope_executor(Callable &&fn)
+  INLINE explicit end_of_scope_executor(Callable &&fn)
         : callback(std::forward<Callable>(fn)) {}
   INLINE ~end_of_scope_executor() { callback(); }
 
@@ -87,8 +76,33 @@ namespace graph {
   using size_t = unsigned;
   using colour = unsigned;
 
-  const std::uint32_t threads_per_core = THREADS_PER_CORE;
-  const std::uint32_t num_threads = std::thread::hardware_concurrency() * threads_per_core;
+  namespace threading {
+    static_assert(THREADS_PER_CORE <= MAX_THREADS_PER_CORE);
+
+    const std::uint32_t num_threads = std::thread::hardware_concurrency() * THREADS_PER_CORE;
+
+    INLINE void set_sched(std::thread::native_handle_type th, const int policy, const int priority) {
+#ifndef _WIN
+      sched_param sch_params;
+      sch_params.sched_priority = priority;
+      if (pthread_setschedparam(th, policy, &sch_params)) {
+        std::cerr << "Failed to set thread scheduling : " << std::strerror(errno) << std::endl;
+        exit(-1);
+      }
+#endif
+    }
+
+    INLINE void get_sched(std::thread::native_handle_type th, int &policy, int &priority) {
+#ifndef _WIN
+      sched_param sch_params;
+      if (pthread_getschedparam(th, &policy, &sch_params)) {
+        std::cerr << "Failed to get thread scheduling : " << std::strerror(errno) << std::endl;
+        exit(-1);
+      }
+      priority = sch_params.sched_priority;
+#endif
+    }
+  }
 
   struct fast_maxclique {
     enum struct algorithms { exact, heuristic, hybrid };
@@ -380,6 +394,23 @@ namespace graph {
     }
 
     void solution(algorithms algo_type, graph::size_t upper_bound) {
+      threading::set_sched(pthread_self(), SCHED_RR, sched_get_priority_min(SCHED_RR));
+
+      // const int priority_min = thread::sched_fifo_min(),
+      //   priority_max = thread::sched_fifo_max();
+
+      // const int priority_mapping_size = priority_max - priority_min + 1;
+
+      // graph::colour min_colour = num_v, max_colour = 0;
+
+      // thread::sched_rr(thread::sched_rr_min());
+
+      // sch.sched_priority = 20;
+      // if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch)) {
+      //   std::string str_err = "Failed to set priority of thread " + std::strerror(errno);
+      //   throw std::runtime_error(str_err.c_str());
+      // }
+
       auto begin = std::chrono::high_resolution_clock::now();
 
       if (algo_type == algorithms::hybrid) {
@@ -396,10 +427,13 @@ namespace graph {
 
       ///////////////////////
 
+      std::vector<std::pair<graph::colour, std::uint32_t>> colour_threads;
+      colour_threads.reserve(threading::num_threads);
+
       std::shared_mutex thread_mtx;
       std::condition_variable_any thread_pool;
-      std::vector<std::thread> threads(num_threads);
-      std::vector<bool> available(num_threads, true);
+      std::vector<std::thread> threads(threading::num_threads);
+      std::vector<bool> available(threading::num_threads, true);
 
       std::mutex read_mtx;
       std::condition_variable reading_is_complete;
@@ -454,8 +488,6 @@ namespace graph {
           break;
         }
 
-        std::vector<graph::colour> colours = sort_vertices_by_colour(vertices);
-
         graph::size_t current_max_clique_size;
         {
           std::shared_lock clique_lock(max_clique_mtx);
@@ -471,6 +503,7 @@ namespace graph {
         }
 #endif
 
+        std::vector<graph::colour> colours = sort_vertices_by_colour(vertices);
         for (std::uint32_t thread_id = 0; thread_id < threads.size() && not vertices.empty()
                && not abort_search && not upper_bound_reached; ++thread_id) {
 
@@ -481,7 +514,9 @@ namespace graph {
             }
 
             const graph::key v = vertices.back();
-            if (colours.back() <= current_max_clique_size) {
+            const graph::colour colour = colours.back();
+
+            if (colour <= current_max_clique_size) {
               abort_search = true;
 #ifdef LOG
               print(std::to_string(adj_lst[v].first) + " has insufficiant colours. abort search!");
@@ -551,6 +586,13 @@ namespace graph {
                 return;
               }
 
+              graph::colour thread_colour = colours.back();
+              {
+
+                std::unique_lock thread_lock(thread_mtx);
+                colour_threads.emplace_back(std::make_pair(thread_colour, thread_id));
+              }
+
 #ifdef LOG
               print(std::string("branching on ") + std::to_string(adj_lst[v].first)
                     + " with " + std::to_string(neighbours.size()) + " neighbours has "
@@ -593,6 +635,16 @@ namespace graph {
                           << std::chrono::duration<double>(end - begin).count() << "s\n";
               }
 #endif
+              {
+                std::unique_lock thread_lock(thread_mtx);
+                for (auto &c_th : colour_threads) {
+                  if (c_th.first == thread_colour && c_th.second == thread_id) {
+                    std::swap(c_th, colour_threads.back());
+                    colour_threads.pop_back();
+                    break;
+                  }
+                }
+              }
             }, thread_id, v, current_max_clique_size);
 
             std::unique_lock reading_lock(read_mtx);
@@ -601,6 +653,37 @@ namespace graph {
             });
 
           }
+        }
+        if (not abort_search) {
+          std::unique_lock thread_lock(thread_mtx);
+          std::sort(colour_threads.begin(), colour_threads.end(),
+                    [](const auto &l, const auto &r) {
+                      return l.first > r.first ||
+                        (l.first == r.first && l.second < r.second);
+                    });
+
+#ifdef LOG
+          std::ostringstream oss;
+#endif
+          int max_prio = sched_get_priority_max(SCHED_RR);
+          graph::colour max_col = colour_threads.front().first;
+          for (const auto &[col, th] : colour_threads) {
+
+            if (col != max_col) {
+              max_col = col;
+              if (max_prio > 1 + sched_get_priority_min(SCHED_RR)) {
+                max_prio--;
+              }
+            }
+#ifdef LOG
+            oss << "(" << th << " - " << col << " - " << max_prio << ") ";
+#endif
+            threading::set_sched(threads[th].native_handle(), SCHED_RR, max_prio);
+          }
+
+#ifdef LOG
+          print(oss.str());
+#endif
         }
       }
 
@@ -786,7 +869,7 @@ int main(int ac, const char *av[]) {
   const auto hold_time = 1s;
 #endif
 
-  std::cout << "Num Threads " << num_threads << "\n";
+  std::cout << "Num Threads " << threading::num_threads << "\n";
 
   try {
     fast_maxclique fmc;
@@ -806,11 +889,11 @@ int main(int ac, const char *av[]) {
 //           std::this_thread::sleep_for(hold_time);
 // #endif
 
-          std::cout << "Using Hybrid [" << l << ", " << r << "]\n";
-          fmc.find_maxclique(fast_maxclique::algorithms::hybrid, l, r);
-#ifdef LOG
-          std::this_thread::sleep_for(hold_time);
-#endif
+//           std::cout << "Using Hybrid [" << l << ", " << r << "]\n";
+//           fmc.find_maxclique(fast_maxclique::algorithms::hybrid, l, r);
+// #ifdef LOG
+//           std::this_thread::sleep_for(hold_time);
+// #endif
 
           std::cout << "Using Exact [" << l << ", " << r << "]\n";
           fmc.find_maxclique(fast_maxclique::algorithms::exact, l, r);
