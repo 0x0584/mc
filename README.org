@@ -1,0 +1,20 @@
+#+TITLE: Parallel algorithm to find Max Clique with reasonable performance
+#+AUTHOR: Anas Rchid
+#+EMAIL: archid-@student.1337.ma
+
+* About
+
+#+BEGIN_QUOTE
+/This is a side project I have been playing with in my spare time.  I have learned so much about graph theory applications and C++ multithreading/parallel programming.  This is not the best nor the only implemetation, so please feel free to tweak it into your liking./
+#+END_QUOTE
+
+Max Clique is a well known NP problem in Computer Science. Algorithms have been developed throughout the years.  This implementation is based on a [[https://www.researchgate.net/publication/220909316_An_Efficient_Branch-and-Bound_Algorithm_for_Finding_a_Maximum_Clique][paper]] published in 2003.  Typically, the specification on white papers is theoritical, hence it is subject to further optimisation when implemented.
+
+
+* Naive Approach
+
+* Application of Graph Colouring to reduce search space
+
+* Measurments
+
+* References

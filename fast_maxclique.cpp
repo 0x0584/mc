@@ -407,7 +407,7 @@ namespace graph {
 
       std::atomic_size_t total_branches = 0;
 
-      bool abort_search = false;
+      std::atomic_bool abort_search = false;
       owner_thread_id = -1u;
 
       /////////////////////////

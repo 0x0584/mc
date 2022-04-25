@@ -1,65 +1,54 @@
-#include <iostream>
+#include <fstream>
+#include <iomanip>
 
-#include "graph.hpp"
+#include "max_clique.hpp"
 
-int main() {
-  graph g;
+struct stream {
+  std::unique_ptr<std::ifstream> file;
+  std::istream *stream_ = nullptr;
 
-  int n_verts, n_edges;
-  std::cin >> n_verts >> n_edges;
-  for (int i = 1; i <= n_verts; ++i) {
-    g.add_vertex(i);
+  stream(int argc, const char *argv[]) {
+    if (argc > 1) {
+      if (file.reset(new std::ifstream(argv[1])); not file->is_open()) {
+        std::string str_err = std::string(argv[1]) + " not found";
+        throw std::runtime_error(str_err.c_str());
+      }
+      stream_ = file.get();
+    } else {
+      stream_ = &std::cin;
+    }
   }
 
-  while (n_edges--) {
-    int u, v;
-    std::cin >> u >> v;
-    g.add_edge({u, v});
+  std::istream &get_stream() {
+    stream_->clear();
+    stream_->seekg(0, std::ios_base::beg);
+    return *stream_;
   }
+};
 
-  // g.add_edge_undirected({1, 2});
-  // g.add_edge_undirected({1, 4});
-  // g.add_edge_undirected({1, 3});
-  // g.add_edge_undirected({1, 8});
+using namespace mc;
 
-  // g.add_edge_undirected({2, 6});
-  // g.add_edge_undirected({2, 5});
-  // g.add_edge_undirected({2, 4});
-  // g.add_edge_undirected({2, 7});
+int main(int argc, const char *argv[]) {
+  std::cout << std::fixed << std::setprecision(3);
+  std::cerr << std::fixed << std::setprecision(3);
 
-  // g.add_edge_undirected({3, 4});
-  // g.add_edge_undirected({3, 4});
-  // g.add_edge_undirected({3, 6});
-  // g.add_edge_undirected({3, 5});
-  // g.add_edge_undirected({3, 10});
-
-  // g.add_edge_undirected({4, 6});
-  // g.add_edge_undirected({4, 7});
-  // g.add_edge_undirected({4, 5});
-  // g.add_edge_undirected({4, 9});
-  // g.add_edge_undirected({4, 10});
-
-  // g.add_edge_undirected({6, 8});
-
-  // g.add_edge_undirected({5, 6});
-  // g.add_edge_undirected({5, 7});
-  // g.add_edge_undirected({5, 8});
-
-  // g.add_edge_undirected({7, 9});
-  // g.add_edge_undirected({7, 9});
-  // g.add_edge_undirected({7, 10});
-
-  // g.add_edge_undirected({8, 9});
-
-  // g.add_edge_undirected({9, 10});
-
-  auto &&mc = g.fahle_max_clique();
-  std::sort(mc.begin(), mc.end());
-  std::cout << "SIZE = " << mc.size() << " { ";
-  for (vertex_t v : mc) {
-    std::cout << v << " ";
+  stream strm(argc, argv);
+  {
+    MAKE_TIMER(by_neighbours);
+    max_clique maxclique(
+        reader(order_vertices::by_neighbours, strm.get_stream()));
   }
-  std::cout << "}\n";
-
+  std::cout << std::endl;
+  {
+    MAKE_TIMER(by_neighbourhood);
+    max_clique maxclique(
+        reader(order_vertices::by_neighbourhood, strm.get_stream()));
+  }
+  std::cout << std::endl;
+  {
+    MAKE_TIMER(by_degeneracy);
+    max_clique maxclique(
+        reader(order_vertices::by_degeneracy, strm.get_stream()));
+  }
   return 0;
 }
