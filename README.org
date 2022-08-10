@@ -1,0 +1,18 @@
+#+AUTHOR: 0x0584
+#+EMAIL: archid-@student.1337.ma
+
+* About
+  - compile using =make mc=
+  - run program with =file= for =N= runs using =./mc N < file=
+ 
+* Max Click Problem
+ 
+* Algorithm
+
+** multi-threaded version
+** distributed version [0/3]
+
+- [ ] create a cluster of machines
+- [ ] serialise =struct algorithm_status= within cluster
+
+* Implementation

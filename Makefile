@@ -1,32 +1,34 @@
-LOG				?= 1
-DEBUG			?= 1
-PROFILER		?= 0
-RELEASE			?= 1
+LOG					?= 0
+DEBUG				?= 0
+RELEASE				?= 1
 
-THREADS_PER_CORE ?= 8
+THREADS_PER_CORE 	?= 8
 
-CXX				?= g++
-CPPFLAGS		+= -std=c++17 -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
-					-Wctor-dtor-privacy -Wdisabled-optimization -Wformat=2 -Winit-self -Wmissing-declarations \
-					-Wmissing-include-dirs -Wold-style-cast -Woverloaded-virtual -Wredundant-decls -Wshadow \
-					-Wsign-conversion -Wsign-promo -Wstrict-overflow=5 -Wswitch-default -Wundef -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
+CXX					?= g++
+CXXFLAGS			?= -std=c++17 -Wformat=2 -pedantic -Wundef -Wall -Wextra -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpassimizing-move
+CXXFLAGS 			+= -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
 ifeq ($(LOG),1)
-	CPPFLAGS += -DLOG
-endif
-
-ifeq ($(PROFILER),1)
-	CPPFLAGS += -DPROFILER
+	CXXFLAGS += -DLOG
 endif
 
 ifeq ($(DEBUG),1)
-	CPPFLAGS += -DDEBUG
+	CXXFLAGS += -DDEBUG -g -Og
 else
-	CPPFLAGS += -DNDEBUG
+	CXXFLAGS += -DNDEBUG
 endif
 
 ifeq ($(RELEASE),1)
-	CPPFLAGS += -O3
-else
-	CPPFLAGS += -Og -g
+	CXXFLAGS += -O3
 endif
+
+info:
+	@echo "LOG=$(LOG)"
+	@echo "DEBUG=$(DEBUG)"
+	@echo "RELEASE=$(RELEASE)"
+	@echo "THREADS_PER_CORE=$(THREADS_PER_CORE)"
+	@echo "CXX=$(CXX)"
+	@echo "CXXFLAGS=$(CXXFLAGS)"
+
+%: %.cpp %.hpp
+	@$(CXX) $(CXXFLAGS) $< -o $@
