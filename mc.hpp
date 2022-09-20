@@ -1,22 +1,10 @@
 #ifndef MAXCLIQUE_HPP
 #define MAXCLIQUE_HPP
 
-#include <atomic>
-#include <execution>
-#include <mutex>
-#include <shared_mutex>
-#include <thread>
-
 #define LITERAL(expr) #expr
 #define EMPTY_MACRO                                                            \
   do {                                                                         \
   } while (false)
-
-#ifndef THREADS_PER_CORE
-#define THREADS_PER_CORE 8
-#endif
-
-using namespace std::chrono_literals;
 
 #ifndef LOG
 #define DELAY() EMPTY_MACRO
@@ -32,9 +20,19 @@ using namespace std::chrono_literals;
 #define DELAY() std::this_thread::sleep_for(PAUSE_DELAY)
 #endif // LOG
 
-#include <algorithm>
-#include <climits>
+#include <atomic>
+#include <chrono>
+#include <execution>
 #include <functional>
+#include <memory_resource>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <utility>
+
+using namespace std::chrono_literals;
+
+#include <algorithm>
 #include <map>
 #include <numeric>
 #include <set>
@@ -48,16 +46,16 @@ using namespace std::chrono_literals;
 //#define NDEBUG
 
 #include <cassert>
-#include <chrono>
+#include <climits>
 #include <cstring>
+#include <getopt.h>
+
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <istream>
-#include <memory_resource>
 #include <sstream>
 #include <string>
-#include <utility>
 
 #define COL_GREEN "\x1b[32m"
 #define COL_MAGENTA "\x1b[35m"
@@ -66,11 +64,9 @@ using namespace std::chrono_literals;
 #define COL_BOLD "\x1b[1m"
 
 struct log {
-  static inline std::mutex mtx;
-
   enum flags { none = 0x0, bold = 0b0001, ansi_colours = 0b0010 };
 
-  static void setup_logger() {
+  static inline void setup_logger() {
     std::cout << std::fixed << std::setprecision(3) << std::left;
     std::cerr << std::fixed << std::setprecision(3) << std::left;
   }
@@ -127,7 +123,14 @@ struct log {
     ((std::cout << std::forward<Args>(args) << " "), ...);
     std::cout << COL_RESET << std::endl;
   }
+
+private:
+  static inline std::mutex mtx;
 };
+
+#ifndef THREADS_PER_CORE
+#define THREADS_PER_CORE 8
+#endif
 
 namespace thread {
 const std::uint32_t threads_per_core = THREADS_PER_CORE;
@@ -171,23 +174,81 @@ static inline void container_reserve_memory(T &container, std::size_t size) {
   container.reserve(size);
 }
 
+enum struct flavour { exact, heuristic, hybrid };
+
+std::ostream &operator<<(std::ostream &os, flavour algo_type) {
+  if (algo_type == flavour::exact) {
+    return os << "Exact Algorithm";
+  } else if (algo_type == flavour::heuristic) {
+    return os << "Heuristic Algorithm";
+  } else {
+    return os << "Hybrid Algorithm";
+  }
+}
+
 struct args {
-  static void parse(int argc, const char *argv[]) {
-    num_turns = argc == 1 ? 100 : std::atol(argv[1]); // TODO: handle --run N
-    stdin = true;      // TODO: handle --in input.g
-    undirected = true; // TODO: handle --edge directed/undirected
-    // size = 1;          // TODO: handle --size N
-    // if (size != -1u) {
-    //   expect_size = true;
-    // }
+  static void parse(int argc, char *argv[]) {
+    for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:dey")) != -1;) {
+      switch (ch) {
+      case 'r': // XXX: handle --run N
+        num_turns = std::max(1l, std::atol(optarg));
+        break;
+      case 'i': // XXX: handle --in input.g
+        stdin = false;
+        file = std::ifstream(optarg);
+        break;
+      case 'd': // XXX: handle --edge-directed
+        undirected = false;
+        break;
+      case 's': // XXX: handle --size N
+        expect_size = true;
+        size = static_cast<std::size_t>(std::atol(optarg));
+        log::info("Expected Max Clique of size", size);
+        break;
+      case 'u': // XXX: handle --upper-bound N
+        upper_bound = static_cast<std::size_t>(std::atol(optarg));
+        log::info("Expected Upper Bound for Max Clique of size", upper_bound);
+        break;
+      case 'l': // XXX: handle --lower-bound N
+        lower_bound = static_cast<std::size_t>(std::atol(optarg));
+        log::info("Expected Lower Bound for Max Clique of size", lower_bound);
+        break;
+      case 'e': // XXX: handle --exact
+        if (exec_mode == flavour::heuristic) {
+          // just in case both hybrid and excat were specified, run as hybrid
+          exec_mode = flavour::exact;
+        }
+        break;
+      case 'y': // XXX: handle --hybrid
+        exec_mode = flavour::hybrid;
+        break;
+      case ':':
+      case '?':
+      default:
+        std::cerr
+            << "Find the Max Clique of a graph using branch-and-bound\n\n"
+            << "  -r N run for N times\n"
+            << "  -i FILE take input from FILE instead of STDIN\n"
+            << "  -u N expect a at most a clique of size N\n"
+            << "  -l N expect at least a clique of size N\n"
+            << "  -e run the algorithm as EXACT branching (default HEURISTIC)\n"
+            << "  -y run the algorithm as HYBRID (HEURISTIC + EXACT)"
+            << "  -d use DIRECTED edges instead of the default UNDIRECTED\n";
+        exit(EXIT_FAILURE);
+      }
+    }
+
+    log::info("Running", exec_mode);
   }
 
   static inline std::istream &stream() { return stdin ? std::cin : file; }
 
   static inline std::ifstream file;
-  static inline long num_turns = LONG_MAX;
-  static inline bool expect_size, undirected = false, stdin = false;
-  static inline std::size_t size = -1u;
+  static inline long num_turns = 100;
+  static inline bool expect_size, undirected = true, stdin = true;
+  static inline std::size_t size = -1u, upper_bound = -1u, lower_bound = 1;
+
+  static inline flavour exec_mode = flavour::heuristic;
 };
 
 struct input {
@@ -199,9 +260,9 @@ struct input {
     std::getline(args::stream(), line);
     fetch_ftor fetcher(line);
     if (not(fetcher(num_v) && fetcher(num_e))) {
-      throw std::runtime_error("Could not fetcher input header, use --help");
+      throw std::runtime_error("Could not fetcher input header, use -?");
     }
-    if ((args::expect_size = fetcher(args::size))) {
+    if (not args::expect_size && (args::expect_size = fetcher(args::size))) {
       log::info("Expected Max Clique of size", args::size);
     }
 
@@ -424,18 +485,6 @@ private:
   vector_2d<bool> adj_mat; // Adjacency Matrix for fast edge probing
 };
 
-enum struct flavour { exact, heuristic, hybrid };
-
-std::ostream &operator<<(std::ostream &os, flavour algo_type) {
-  if (algo_type == flavour::exact) {
-    return os << "Exact Algorithm";
-  } else if (algo_type == flavour::heuristic) {
-    return os << "Heuristic Algorithm";
-  } else {
-    return os << "Hybrid Algorithm";
-  }
-}
-
 class multithreaded {
 public:
   static inline const mc::size_t maximum_bound = -1u;
@@ -486,13 +535,17 @@ private:
                         const mc::size_t depth = 1);
 
 public:
-  static inline const mc::size_t no_upper_bound = -1u;
+  static inline mc::size_t no_upper_bound = -1u;
 
   multithreaded() { LONG_DELAY(); }
 
-  std::vector<graph::vertex> solve(flavour algo = flavour::exact,
-                                   mc::size_t lower_bound = 0u,
-                                   mc::size_t upper_bound = no_upper_bound);
+  std::vector<graph::vertex>
+  solve(flavour algo = flavour::exact,
+        // the expected behaviour is (as far as I have tested) the function call
+        // with be launched with the up-to-date values, even though the it seems
+        // to be at compile time, it is dynamic initialisation
+        mc::size_t lower_bound = args::lower_bound,
+        mc::size_t upper_bound = args::upper_bound);
 };
 } // namespace mc
 #endif // MAXCLIQUE_HPP
