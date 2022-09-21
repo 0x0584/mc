@@ -188,14 +188,15 @@ std::ostream &operator<<(std::ostream &os, flavour algo_type) {
 
 struct args {
   static void parse(int argc, char *argv[]) {
-    for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:dey")) != -1;) {
+    std::string filename;
+    for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
       switch (ch) {
       case 'r': // XXX: handle --run N
         num_turns = std::max(1l, std::atol(optarg));
         break;
       case 'i': // XXX: handle --in input.g
         stdin = false;
-        file = std::ifstream(optarg);
+        file = std::ifstream(filename = optarg);
         break;
       case 'd': // XXX: handle --edge-directed
         undirected = false;
@@ -203,7 +204,7 @@ struct args {
       case 's': // XXX: handle --size N
         expect_size = true;
         size = static_cast<std::size_t>(std::atol(optarg));
-        log::info("Expected Max Clique of size", size);
+        log::info("Expecting a Max Clique of size", size);
         break;
       case 'u': // XXX: handle --upper-bound N
         upper_bound = static_cast<std::size_t>(std::atol(optarg));
@@ -222,6 +223,7 @@ struct args {
       case 'y': // XXX: handle --hybrid
         exec_mode = flavour::hybrid;
         break;
+      case 'h':
       case ':':
       case '?':
       default:
@@ -231,14 +233,21 @@ struct args {
             << "  -i FILE take input from FILE instead of STDIN\n"
             << "  -u N expect a at most a clique of size N\n"
             << "  -l N expect at least a clique of size N\n"
-            << "  -e run the algorithm as EXACT branching (default HEURISTIC)\n"
-            << "  -y run the algorithm as HYBRID (HEURISTIC + EXACT)"
-            << "  -d use DIRECTED edges instead of the default UNDIRECTED\n";
+            << "  -e run the algorithm as EXACT (default HEURISTIC)\n"
+            << "  -y run the algorithm as HYBRID (HEURISTIC + EXACT)\n"
+            << "  -d use DIRECTED edges instead of the default UNDIRECTED\n"
+            << "\n";
         exit(EXIT_FAILURE);
       }
     }
 
-    log::info("Running", exec_mode);
+    log::info("Running", args::exec_mode);
+
+    if (stdin) {
+      log::info("Reading from STDIN");
+    } else {
+      log::info("Reading from", filename);
+    }
   }
 
   static inline std::istream &stream() { return stdin ? std::cin : file; }
@@ -323,7 +332,7 @@ struct graph {
           not line.empty() && line.front() != '%') {
         vertex u, v;
         input::fetch_ftor fetcher = line;
-        if (fetcher(u) && fetcher(v)) {
+        if (fetcher(u) && fetcher(v) && u != v) {
           add_edge(u, v);
         }
       }
@@ -537,7 +546,10 @@ private:
 public:
   static inline mc::size_t no_upper_bound = -1u;
 
-  multithreaded() { LONG_DELAY(); }
+  multithreaded() {
+    log::info("Number of available Threads", thread::num_threads);
+    LONG_DELAY();
+  }
 
   std::vector<graph::vertex>
   solve(flavour algo = flavour::exact,

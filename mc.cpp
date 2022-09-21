@@ -570,15 +570,16 @@ void multithreaded::branch_heuristic(
 } // namespace mc
 
 int main(int argc, char *argv[]) {
-  log::setup_logger();
-  log::info("Number of available Threads", thread::num_threads);
+  using namespace mc;
 
-  mc::args::parse(argc, argv);
+  log::setup_logger();
+  args::parse(argc, argv);
 
   try {
-    for (mc::multithreaded algo; mc::args::num_turns-- > 0;) {
-      log::info(mc::args::num_turns + 1, "turns left..");
-      algo.solve(mc::args::exec_mode);
+    multithreaded algo;
+    for (long turn = 1; turn <= args::num_turns; ++turn) {
+      log::info("Turn", turn, "/", args::num_turns);
+      algo.solve(args::exec_mode);
     }
   } catch (const std::exception &e) {
     log::info(e.what());
