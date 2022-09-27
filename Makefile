@@ -1,24 +1,19 @@
 LOG					?= 0
-DEBUG				?= 0
-RELEASE			?= 1
+RELEASE				?= 0
 
 THREADS_PER_CORE 	?= 8
 
-CXX						?= g++
+CXX					?= g++
 CXXFLAGS			?= -std=c++17 -Wformat=2 -pedantic -Wundef -Wall -Wextra -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpassimizing-move
 
 ifeq ($(RELEASE),1)
-	CXXFLAGS += -O3
+	CXXFLAGS += -DNDEBUG -O3
+else
+	CXXFLAGS += -DDEBUG -g3
 endif
 
 ifeq ($(LOG),1)
 	CXXFLAGS += -DLOG
-endif
-
-ifeq ($(DEBUG),1)
-	CXXFLAGS += -DDEBUG -g -Og
-else
-	CXXFLAGS += -DNDEBUG
 endif
 
 CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)

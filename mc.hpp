@@ -24,6 +24,7 @@
 #include <chrono>
 #include <execution>
 #include <functional>
+#include <future>
 #include <memory_resource>
 #include <mutex>
 #include <shared_mutex>
@@ -272,7 +273,7 @@ struct input {
       throw std::runtime_error("Could not fetcher input header, use -?");
     }
     if (not args::expect_size && (args::expect_size = fetcher(args::size))) {
-      log::info("Expected Max Clique of size", args::size);
+      log::info("Expecting a Max Clique of size", args::size);
     }
 
     log::info("Source Graph is", (args::undirected ? "Undirected" : "Directed"),
@@ -313,6 +314,8 @@ struct graph {
 
   friend struct enumerator;
 
+  static inline constexpr std::size_t CHUNK_SIZE = 16384; // 16KB
+
   graph(const graph &) = default;
   graph(graph &&) = default;
 
@@ -321,28 +324,75 @@ struct graph {
     auto begin = std::chrono::high_resolution_clock::now();
 
     container_reserve_memory(adj_lst, in.num_v);
-    for (std::size_t n_edges = in.num_e;
-         not in->eof() && in->good() && n_edges--;) {
-      std::string line;
-      // TODO: if extended file source is to be supported, optimised read must
-      // be multithreaded by reading chunks and merging results of the running
-      // threads based on the number of lines, i.e. number of edges defined
-      if (std::getline(args::stream(), line);
-          // XXX: handle comments when line starts with %
-          not line.empty() && line.front() != '%') {
-        vertex u, v;
-        input::fetch_ftor fetcher = line;
-        if (fetcher(u) && fetcher(v) && u != v) {
-          add_edge(u, v);
+    // for (std::size_t n_edges = in.num_e;
+    //      not in->eof() && in->good() && n_edges--;) {
+    //   std::string line;
+    //   // TODO: if extended file source is to be supported, optimised read must
+    //   // be multithreaded by reading chunks and merging results of the running
+    //   // threads based on the number of lines, i.e. number of edges defined
+    //   if (std::getline(args::stream(), line);
+    //       // XXX: handle comments when line starts with %
+    //       not line.empty() && line.front() != '%') {
+    //     vertex u, v;
+    //     input::fetch_ftor fetcher = line;
+    //     if (fetcher(u) && fetcher(v) && u != v) {
+    //       add_edge(u, v);
+    //     }
+    //   }
+    //   // log::info("Input left", log::progress(n_edges, in.num_e));
+    // }
+
+    std::mutex mtx;
+    std::vector<std::future<bool>> Q;
+    std::vector<char> tmp(CHUNK_SIZE);
+    while (not in->eof() && not in->fail()) {
+      std::vector<char> buff(CHUNK_SIZE);
+      std::move(mc_range(tmp), buff.data());
+      in->read(buff.data() + tmp.size(), CHUNK_SIZE);
+      tmp.clear();
+      buff.resize(static_cast<std::size_t>(in->gcount()));
+      //log::print("reading...", buff.size());
+      for (auto it = buff.end(); it != buff.begin();) {
+        if (--it; *it == '\n') {
+          std::move(++it, buff.end(), tmp.data());
+          break;
         }
       }
-      // log::info("Input left", log::progress(n_edges, in.num_e));
+      // log::print("reading...", tmp.size());
+
+      Q.emplace_back(std::async(
+          std::launch::async,
+          [&mtx, this](std::vector<char> buff) {
+            //log::print("processing...");
+            std::istringstream iss(buff.data());
+            while (not iss.eof() && not iss.fail()) {
+              vertex u, v;
+              iss >> u >> v;
+              if (u != v) {
+                std::unique_lock lock(mtx);
+                add_edge(u, v);
+              }
+            }
+            return true;
+          },
+          std::move(buff)));
+    }
+    for (auto &task : Q) {
+      task.get();
     }
 
     auto end = std::chrono::high_resolution_clock::now();
+
     log::info("Graph with", in.num_v, "vertices and", edge_count,
               "edges was read in", log::time_diff(begin, end, log::bold));
+
     assert(adj_lst.size() == in.num_v);
+    assert(edge_count == in.num_e);
+
+    if (in->fail() && not in->eof()) {
+      log::info("UNEXPECTED READ FAILURE");
+      exit(EXIT_FAILURE);
+    }
 
     LONG_DELAY();
   }

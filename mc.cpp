@@ -13,7 +13,7 @@ enumerator::enumerator() : g(in) {
       [&neighs_degree, this](const graph::adjacency_map::value_type &e) {
         neighs_degree[e.first] = std::accumulate(
             mc_const_range(e.second), 0ul,
-            [this](std::size_t total_degrees, const graph::vertex u) {
+            [this](std::size_t total_degrees, graph::vertex u) {
               return g.neighbours(u).size() + total_degrees;
             });
       });
@@ -180,10 +180,14 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     if (solution(flavour::heuristic, upper_bound); upper_bound_reached) {
       auto end = std::chrono::high_resolution_clock::now();
       log::info(flavour::hybrid, "finished using", flavour::heuristic,
-                "only (in", log::time_diff(begin, end, log::bold), ")");
+                "only took", log::time_diff(begin, end, log::bold));
       return;
     }
+
+    // FIXME: prune all vertices with core number less than overall_size
   }
+
+  mc::size_t old_max_clique_size = overall_size;
 
   // the awaiting pool of threads has shared access to the availability vector,
   // so that if multiple threads finished simultaneously they may flag
@@ -227,8 +231,6 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
   // since the algorithm is recursive, each callback is a branching
   std::atomic_size_t total_branches = 0;
 
-  mc::size_t old_max_clique_size = overall_size;
-
   auto percent_begin = std::chrono::high_resolution_clock::now();
   while (not W.empty() && not abort_search && not upper_bound_reached) {
     auto percent_end = std::chrono::high_resolution_clock::now();
@@ -247,6 +249,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     percent_begin = percent_end;
 
     {
+      // block for available threads
       std::unique_lock thread_lock(thread_mtx);
       thread_pool.wait(thread_lock, [&] {
         return std::any_of(mc_const_range(available),
@@ -255,13 +258,13 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     }
 
     if (abort_search || upper_bound_reached) {
-      break;
+      break; // search has terminated
     }
 
     mc::size_t current_max_clique_size;
     {
       std::shared_lock clique_lock(mtx);
-      current_max_clique_size = overall_size;
+      current_max_clique_size = overall_size; // stamp-sync the size
     }
 
     if (old_max_clique_size != current_max_clique_size) {
@@ -269,6 +272,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
       old_max_clique_size = current_max_clique_size;
     }
 
+    // sort vertices based on their colours using greedy colouring
     std::vector<enumerator::colour> colours = g.greedy_colour_sort(W);
     for (std::uint32_t thread_id = 0;
          thread_id < threads.size() && not W.empty() && not abort_search &&
@@ -276,24 +280,24 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
          ++thread_id) {
 
       if (not available[thread_id]) {
-        continue;
+        continue; // the current thread is still busy
       }
 
-      available[thread_id] = false;
-      if (threads[thread_id].joinable()) {
+      // set the thread as busy
+      if (available[thread_id].flip(); threads[thread_id].joinable()) {
         threads[thread_id].join();
       }
 
-      const enumerator::key v = W.back();
       if (colours.back() <= current_max_clique_size) {
 #ifdef LOG
-        log::print(g.key_to_vertex(v),
+        log::print(g.key_to_vertex(W.back()),
                    "has insufficient colours. abort search!");
 #endif
         abort_search = true;
         break;
       }
 
+      const enumerator::key v = W.back();
       W.pop_back();
       colours.pop_back();
       reading = true;
