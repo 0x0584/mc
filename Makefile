@@ -1,10 +1,10 @@
-LOG					?= 0
-RELEASE				?= 0
+LOG			?= 0
+RELEASE			?= 0
 
 THREADS_PER_CORE 	?= 8
 
-CXX					?= g++
-CXXFLAGS			?= -std=c++17 -Wformat=2 -pedantic -Wundef -Wall -Wextra -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpassimizing-move
+CXX			?= g++
+CXXFLAGS		?= -std=c++17 -Wformat=2 -pedantic -Wundef -Wall -Wextra -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
 
 ifeq ($(RELEASE),1)
 	CXXFLAGS += -DNDEBUG -O3
@@ -40,4 +40,4 @@ info:
 	@echo "CXXFLAGS=$(CXXFLAGS)"
 
 clean:
-	rm $(PROGRAM) $(OBJECT)
+	rm -f $(PROGRAM) $(OBJECT)

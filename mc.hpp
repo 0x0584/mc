@@ -116,6 +116,19 @@ struct log {
     std::cout << COL_RESET << std::endl;
   }
 
+  template <typename... Args> static inline void printv(Args &&...args) {
+    std::scoped_lock print_lock(mtx);
+    ((std::cout << std::forward<Args>(args)), ...); // verbose
+    std::cout << COL_RESET << std::endl;
+  }
+
+  template <typename... Args> static inline void error(Args &&...args) {
+    std::scoped_lock print_lock(mtx);
+    ((std::cerr << std::forward<Args>(args) << " "), ...);
+    std::cerr << COL_RESET << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+
   template <typename... Args>
   static inline void print_thread(std::uint32_t thread_id, Args &&...args) {
     std::scoped_lock print_lock(mtx);
@@ -269,8 +282,8 @@ struct input {
     std::string line;
     std::getline(args::stream(), line);
     fetch_ftor fetcher(line);
-    if (not(fetcher(num_v) && fetcher(num_e))) {
-      throw std::runtime_error("Could not fetcher input header, use -?");
+    if (not fetcher(num_v) || not fetcher(num_e)) {
+      throw std::runtime_error("Could not parse input header, use -?");
     }
     if (not args::expect_size && (args::expect_size = fetcher(args::size))) {
       log::info("Expecting a Max Clique of size", args::size);
@@ -306,6 +319,92 @@ struct input {
   std::size_t num_v, num_e;
 };
 
+struct feed {
+  static inline const std::int64_t CHUNK_SIZE = 16384; // 16KB
+  static inline const char deli = '\n';
+
+  using buffer = std::array<char, CHUNK_SIZE>;
+  using chunk = std::pair<buffer, std::size_t>;
+
+  feed(feed &&feed) = delete;
+  feed(const feed &feed) = delete;
+
+  inline feed() : tail_remaining(remaining.begin()) {
+    std::memset(remaining.data(), 0x0, remaining.size());
+  }
+
+  ~feed() {
+    if (tail_remaining != remaining.begin()) {
+      // buffer::difference_type size =
+      //     std::distance(remaining.begin(), tail_remaining);
+      // std::string s{remaining.data(), std::size_t(size)};
+      // log::printv(" ==>>> `", s, "` with size=", size);
+      log::error("INVALID file: no NL at the end of the file");
+    }
+  }
+
+  inline operator bool() { return reading(); }
+  inline std::size_t estimate_chunks() const {
+    return 1 + in.num_e / CHUNK_SIZE;
+  }
+  inline std::size_t num_vertices() const { return in.num_v; }
+  inline std::size_t num_edges() const { return in.num_e; }
+
+  chunk read_chunk() {
+    buffer buff;
+    const buffer::difference_type size_remaining =
+        std::distance(remaining.begin(), tail_remaining);
+    std::move(remaining.begin(), tail_remaining, buff.data());
+
+    auto read = read_next(CHUNK_SIZE - size_remaining);
+    auto begin_read = read.first.begin();
+    const auto size_read = read.second;
+    std::move(begin_read, begin_read + size_read, buff.data() + size_remaining);
+
+    const buffer::iterator tail_buff =
+        buff.begin() + (size_remaining + size_read);
+    buffer::iterator delimiter = tail_buff;
+    while (delimiter != buff.begin() && *--delimiter != feed::deli)
+      ;
+    if (delimiter == buff.begin()) {
+      log::error("FAILURE: chunk_size=", CHUNK_SIZE,
+                 " exceeded! recompile with a bigger size");
+    }
+
+    chunk chunk{std::move(buff), std::distance(buff.begin(), delimiter++)};
+    std::move(delimiter, tail_buff, remaining.data());
+    tail_remaining = remaining.begin() + std::distance(delimiter, tail_buff);
+    // log::printv(reads++, " remaining=`",
+    //             std::string{remaining.begin(),
+    //                         std::size_t(std::distance(delimiter,
+    //                         tail_buff))},
+    //             "` EOF=", in->eof());
+    return chunk;
+  }
+
+private:
+  inline bool reading() {
+    if (in->bad()) {
+      log::error("UNEXPECTED READ FAILURE");
+    }
+    return not in->eof() && not in->fail();
+  }
+
+  inline std::pair<buffer, const std::streamsize>
+  read_next(std::streamsize size_read) {
+    buffer read;
+    if (in->read(read.data(), size_read); in->bad()) {
+      log::error("FAILURE: cannot read from stream");
+    }
+    return {read, in->gcount()};
+  }
+
+  std::size_t reads = 0;
+  input in;
+  buffer remaining{};
+  buffer::iterator tail_remaining;
+};
+
 struct graph {
   using vertex = unsigned;
 
@@ -313,112 +412,34 @@ struct graph {
   using adjacency_map = std::unordered_map<vertex, neighbours_set>;
 
   friend struct enumerator;
-
-  static inline constexpr std::size_t CHUNK_SIZE = 16384; // 16KB
+  friend struct graph_builder;
 
   graph(const graph &) = default;
   graph(graph &&) = default;
+  graph() = default;
 
-  inline graph(input &in) : graph(in, args::undirected) {}
-  inline graph(input &in, bool undirected) : in(in), undirected(undirected) {
-    auto begin = std::chrono::high_resolution_clock::now();
-
-    container_reserve_memory(adj_lst, in.num_v);
-    // for (std::size_t n_edges = in.num_e;
-    //      not in->eof() && in->good() && n_edges--;) {
-    //   std::string line;
-    //   // TODO: if extended file source is to be supported, optimised read must
-    //   // be multithreaded by reading chunks and merging results of the running
-    //   // threads based on the number of lines, i.e. number of edges defined
-    //   if (std::getline(args::stream(), line);
-    //       // XXX: handle comments when line starts with %
-    //       not line.empty() && line.front() != '%') {
-    //     vertex u, v;
-    //     input::fetch_ftor fetcher = line;
-    //     if (fetcher(u) && fetcher(v) && u != v) {
-    //       add_edge(u, v);
-    //     }
-    //   }
-    //   // log::info("Input left", log::progress(n_edges, in.num_e));
-    // }
-
-    std::mutex mtx;
-    std::vector<std::future<bool>> Q;
-    std::vector<char> tmp(CHUNK_SIZE);
-    while (not in->eof() && not in->fail()) {
-      std::vector<char> buff(CHUNK_SIZE);
-      std::move(mc_range(tmp), buff.data());
-      in->read(buff.data() + tmp.size(), CHUNK_SIZE);
-      tmp.clear();
-      buff.resize(static_cast<std::size_t>(in->gcount()));
-      //log::print("reading...", buff.size());
-      for (auto it = buff.end(); it != buff.begin();) {
-        if (--it; *it == '\n') {
-          std::move(++it, buff.end(), tmp.data());
-          break;
-        }
-      }
-      // log::print("reading...", tmp.size());
-
-      Q.emplace_back(std::async(
-          std::launch::async,
-          [&mtx, this](std::vector<char> buff) {
-            //log::print("processing...");
-            std::istringstream iss(buff.data());
-            while (not iss.eof() && not iss.fail()) {
-              vertex u, v;
-              iss >> u >> v;
-              if (u != v) {
-                std::unique_lock lock(mtx);
-                add_edge(u, v);
-              }
-            }
-            return true;
-          },
-          std::move(buff)));
-    }
-    for (auto &task : Q) {
-      task.get();
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-
-    log::info("Graph with", in.num_v, "vertices and", edge_count,
-              "edges was read in", log::time_diff(begin, end, log::bold));
-
-    assert(adj_lst.size() == in.num_v);
-    assert(edge_count == in.num_e);
-
-    if (in->fail() && not in->eof()) {
-      log::info("UNEXPECTED READ FAILURE");
-      exit(EXIT_FAILURE);
-    }
-
-    LONG_DELAY();
-  }
-
-  inline void add_edge(const vertex u, const vertex v) {
-    if (vertex_alloc(u); edge_add(u, v)) {
-      ++edge_count;
-      if (vertex_alloc(v); undirected) {
-        edge_add(v, u);
-      }
-    }
+  graph &operator=(graph &) = delete;
+  graph &operator=(graph &&G) {
+    this->A = std::move(G.A);
+    this->edge_count = G.edge_count;
+    this->undirected = G.undirected;
+    return *this;
   }
 
   inline const neighbours_set &neighbours(const vertex v) const {
-    assert(adj_lst.count(v));
-    return adj_lst.at(v);
+    assert(A.count(v));
+    return A.at(v);
   }
 
-  inline const adjacency_map &adjacency_list() const { return adj_lst; }
+  inline const adjacency_map &adjacency() const { return A; }
+
+  inline bool directed() { return not undirected; }
 
   void print() const {
     std::ostringstream oss;
     oss << (undirected ? "Undirected" : "Directed")
-        << " Graph (vertices=" << adj_lst.size() << ", edges=" << edge_count
-        << ")\n";
-    for (const auto &[v, neighs] : adj_lst) {
+        << " Graph (vertices=" << A.size() << ", edges=" << edge_count << ")\n";
+    for (const auto &[v, neighs] : A) {
       oss << v << " { ";
       for (const auto &u : neighs) {
         oss << u << " ";
@@ -430,21 +451,94 @@ struct graph {
   }
 
 private:
-  inline void vertex_alloc(const vertex u) {
-    if (adj_lst[u].empty()) {
-      container_reserve_memory(adj_lst[u], in.num_v);
-    }
-  }
-
-  inline bool edge_add(const vertex u, const vertex v) {
-    return adj_lst[u].emplace(v).second;
-  }
-
-  const input &in;
-  const bool undirected;
-
+  bool undirected = false;
   mc::size_t edge_count = 0;
-  adjacency_map adj_lst;
+  adjacency_map A;
+};
+
+struct batch {};
+
+struct graph_builder {
+  graph_builder(graph_builder &&) = delete;
+  graph_builder(const graph_builder &) = delete;
+
+  explicit graph_builder(bool undirected = args::undirected) {
+    G.undirected = undirected;
+    container_reserve_memory(G.A, feed.num_vertices());
+    Q.reserve(feed.estimate_chunks());
+  }
+
+  graph_builder &operator=(const graph_builder &) = delete;
+  graph_builder &operator=(graph_builder &&) = delete;
+
+  graph build() {
+    auto begin = std::chrono::high_resolution_clock::now();
+
+    do {
+      Q.emplace_back(std::move(std::async(
+          std::launch::deferred,
+          [this](const feed::chunk &chunk) {
+            auto vertex_alloc = [this](graph::vertex u) {
+              std::unique_lock lock(graph_mtx);
+              if (graph::neighbours_set &neighs = G.A[u]; neighs.empty()) {
+                container_reserve_memory(neighs, feed.num_vertices());
+              }
+            };
+
+            auto edge_add = [this](graph::vertex u, graph::vertex v) {
+              std::unique_lock lock(graph_mtx);
+              return G.A[u].emplace(v).second;
+            };
+
+            // TODO: implement manual parsing instead of std::istringstream
+            std::istringstream iss(
+                std::string{chunk.first.data(), chunk.second});
+            while (not iss.eof() && not iss.bad()) {
+              graph::vertex u, v;
+              if (iss >> u; iss.eof()) {
+                log::error("INVALID line; EOF reached");
+              } else if (iss >> v; u == v) {
+                log::info("found cycle for vertex", u);
+              } else {
+                vertex_alloc(u);
+                vertex_alloc(v);
+                if (not edge_add(u, v)) {
+                  log::info("redundant edge from", u, "to", v);
+                  continue;
+                }
+                {
+                  std::unique_lock lock(graph_mtx);
+                  ++G.edge_count;
+                }
+                if (G.undirected) {
+                  edge_add(v, u);
+                }
+              }
+            }
+          },
+          feed.read_chunk())));
+    } while (feed);
+
+    std::for_each(Q.begin(), Q.end(), [](std::future<void> &f) { f.get(); });
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    log::info("Graph with", feed.num_vertices(), "vertices and", G.edge_count,
+              "edges was read in", log::time_diff(begin, end, log::bold));
+
+    assert(G.A.size() == feed.num_vertices());
+    assert(G.edge_count == feed.num_edges());
+
+    LONG_DELAY();
+
+    return std::move(G);
+  }
+
+private:
+  std::mutex graph_mtx;
+  std::vector<std::future<void>> Q;
+  mc::feed feed;
+  graph G;
 };
 
 // vertex wrapper that serves as a medium to access vertices as keys, in order
@@ -458,8 +552,7 @@ struct enumerator {
   using adjacency_vector =
       std::vector<std::pair<graph::vertex, graph::neighbours_set>>;
 
-  input in;
-  graph g;
+  graph G;
 
 public:
   enumerator();
@@ -475,7 +568,7 @@ public:
     std::vector<key> new_neighs;
     new_neighs.reserve(neighs.size());
     for (const key u : neighs) {
-      if (adj_mat[v][u]) { // neighbours of both vertices u and v
+      if (B[v][u]) { // neighbours of both vertices u and v
         new_neighs.emplace_back(u);
       }
     }
@@ -486,8 +579,8 @@ public:
   neighbours(const key v, std::function<bool(const key)> &&probe) const {
     assert(v < vertex_count());
     std::vector<key> neighs;
-    neighs.reserve(adj_lst[v].size());
-    for (const key u : adj_lst[v]) {
+    neighs.reserve(A[v].size());
+    for (const key u : A[v]) {
       if (probe(u)) {
         neighs.emplace_back(u);
       }
@@ -534,14 +627,14 @@ public:
 
   bool is_clique(const std::vector<key> &clique) const;
 
-  inline std::size_t vertex_count() const { return in.num_v; }
+  inline std::size_t vertex_count() const { return G.A.size(); }
 
 private:
   adjacency_vector adj_lst_orig;
 
   template <typename T> using vector_2d = std::vector<std::vector<T>>;
-  vector_2d<key> adj_lst;  // Adjacency List for fast neighbourhood deduction
-  vector_2d<bool> adj_mat; // Adjacency Matrix for fast edge probing
+  vector_2d<key> A;  // Adjacency List for fast neighbourhood deduction
+  vector_2d<bool> B; // Adjacency Matrix for fast edge probing
 };
 
 class multithreaded {

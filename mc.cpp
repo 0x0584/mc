@@ -1,7 +1,10 @@
 #include "mc.hpp"
 
 namespace mc {
-enumerator::enumerator() : g(in) {
+enumerator::enumerator() {
+  graph_builder builder;
+  G = builder.build();
+
   auto begin = std::chrono::high_resolution_clock::now();
 
   // compute the neighbourhood degrees of all vertices for which they shall be
@@ -9,19 +12,19 @@ enumerator::enumerator() : g(in) {
   std::unordered_map<graph::vertex, std::size_t> neighs_degree;
   container_reserve_memory(neighs_degree, vertex_count());
   std::for_each(
-      std::execution::par_unseq, mc_const_range(g.adj_lst),
+      std::execution::par_unseq, mc_const_range(G.A),
       [&neighs_degree, this](const graph::adjacency_map::value_type &e) {
-        neighs_degree[e.first] = std::accumulate(
-            mc_const_range(e.second), 0ul,
-            [this](std::size_t total_degrees, graph::vertex u) {
-              return g.neighbours(u).size() + total_degrees;
-            });
+        neighs_degree[e.first] =
+            std::accumulate(mc_const_range(e.second), 0ul,
+                            [this](std::size_t total_degrees, graph::vertex u) {
+                              return G.neighbours(u).size() + total_degrees;
+                            });
       });
 
   // switch the vertex container from std::unordered_map to std::vector
   adj_lst_orig.resize(vertex_count());
-  std::transform(std::execution::par_unseq, mc_range(g.adj_lst),
-                 adj_lst_orig.begin(), [](graph::adjacency_map::value_type &e) {
+  std::transform(std::execution::par_unseq, mc_range(G.A), adj_lst_orig.begin(),
+                 [](graph::adjacency_map::value_type &e) {
                    return std::make_pair(e.first, std::move(e.second));
                  });
 
@@ -39,31 +42,30 @@ enumerator::enumerator() : g(in) {
   // enumerate neighbours based on the order of vertices
   std::unordered_map<graph::vertex, key> mapping;
   container_reserve_memory(mapping, vertex_count());
-  adj_mat.resize(vertex_count());
-  std::for_each(std::execution::par_unseq, mc_range(adj_mat),
+  B.resize(vertex_count());
+  std::for_each(std::execution::par_unseq, mc_range(B),
                 [this](std::vector<bool> &mtx) { mtx.resize(vertex_count()); });
-  adj_lst.resize(vertex_count());
+  A.resize(vertex_count());
   for (key v = 0; v < vertex_count(); ++v) {
     const adjacency_vector::value_type &v_pair =
         adj_lst_orig[v]; // a pair of vertex its neighbours
     mapping.emplace(v_pair.first, v);
-    adj_lst[v].resize(v_pair.second.size());
+    A[v].resize(v_pair.second.size());
   }
 
   // fill vertex adjacency and sort neighbours based on the induced order
   for (key v = 0; v < vertex_count(); ++v) {
     const graph::neighbours_set &neighs = adj_lst_orig[v].second;
-    std::vector<bool> &v_mtx = adj_mat[v];
+    std::vector<bool> &v_mtx = B[v];
     // induce the indices of neighbours based on the mapping order
     std::transform(std::execution::par_unseq, mc_const_range(neighs),
-                   adj_lst[v].begin(),
-                   [&v_mtx, &mapping](const graph::vertex u) {
+                   A[v].begin(), [&v_mtx, &mapping](const graph::vertex u) {
                      key u_key = mapping.at(u);
                      v_mtx[u_key] = true;
                      return u_key;
                    });
     // then sort them too based on their induced indices for optimal colouring
-    std::sort(std::execution::par_unseq, mc_range(adj_lst[v]));
+    std::sort(std::execution::par_unseq, mc_range(A[v]));
   }
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -84,7 +86,7 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
   // since at most there will be memory allocations as many vertices, it is fine
   // to not reserve memory beforehand (as far as I had tested!)
   for (const key v : neighs) {
-    const std::vector<bool> &v_mtx = adj_mat[v];
+    const std::vector<bool> &v_mtx = B[v];
     colour col = 0;
     //
     // since also, colour sorting is used to prune unnecessary branching when
@@ -116,7 +118,7 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
 bool enumerator::is_clique(const std::vector<key> &clique) const {
   for (const key v : clique) {
     for (const key u : clique) {
-      if (const std::vector<key> &neighs = adj_lst[u]; v != u) {
+      if (const std::vector<key> &neighs = A[u]; v != u) {
         if (std::find(std::execution::par_unseq, mc_const_range(neighs), v) ==
             neighs.end()) {
           return false;

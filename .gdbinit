@@ -1,5 +1,8 @@
-set args < test.txt
+set args -i foo.clq
 define reload
-	make max_clique
+	make
 	run
 end
+b main
+b mc.hpp:graph
+b read_chunk
