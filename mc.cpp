@@ -61,8 +61,8 @@ enumerator::enumerator() {
     const graph::neighbours_set &neighs = E[v].second;
     std::vector<bool> &v_mtx = B[v];
     // induce the indices of neighbours based on the mapping order
-    std::transform(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
-                   A[v].begin(), [&v_mtx, &mapping](const graph::vertex u) {
+    std::transform(std::execution::par_unseq, neighs.begin(), neighs.end(),
+                   A[v].begin(), [&v_mtx, &mapping](graph::vertex u) {
                      key u_key = mapping.at(u);
                      v_mtx[u_key] = true;
                      return u_key;
@@ -89,8 +89,8 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
   //
   // since at most there will be memory allocations as many vertices, it is fine
   // to not reserve memory beforehand (as far as I had tested!)
-  for (const key v : neighs) {
-    const std::vector<bool> &v_mtx = B[v];
+  for (key v : neighs) {
+    const std::vector<bool> &v_mtx = B.at(v);
     colour col = 0;
     //
     // since also, colour sorting is used to prune unnecessary branching when
@@ -99,8 +99,8 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
     //
     // although, since using an adjacency matrix is optimal for probing, this
     // would be far less overhead expense that justifies the memory footprint
-    while (std::any_of(col_class[col].cbegin(), col_class[col].cend(),
-                       [&v_mtx](const key u) { return v_mtx[u]; })) {
+    while (std::any_of(col_class[col].begin(), col_class[col].end(),
+                       [&v_mtx](key u) { return v_mtx.at(u); })) {
       col++;
     }
     col_class[col].emplace_back(v);
@@ -121,10 +121,11 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
 }
 
 bool enumerator::is_clique(const std::vector<key> &clique) const {
-  for (const key v : clique) {
-    for (const key u : clique) {
-      if (const std::vector<key> &neighs = A[u]; v != u) {
-        if (std::find(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
+  for (key v : clique) {
+    for (key u : clique) {
+      if (v != u) {
+        if (const std::vector<key> &neighs = A.at(u);
+            std::find(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
                       v) == neighs.cend()) {
           return false;
         }
@@ -257,8 +258,8 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
       // block for available threads
       std::unique_lock thread_lock(thread_mtx);
       thread_pool.wait(thread_lock, [&] {
-        return std::any_of(available.cbegin(), available.cend(),
-                           [](const bool th) { return th; });
+        return std::any_of(available.begin(), available.end(),
+                           [](bool th) { return th; });
       });
     }
 
@@ -302,12 +303,12 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
         break;
       }
 
-      const enumerator::key v = W.back();
+      enumerator::key v = W.back();
       W.pop_back();
       colours.pop_back();
       reading = true;
       threads[thread_id] = std::thread(
-          [&, this](const std::uint32_t thread_id, const enumerator::key v,
+          [&, this](std::uint32_t thread_id, enumerator::key v,
                     mc::size_t max_clique_size) {
             // since the thread can return on several conditions, it is
             // practical to use a scope destructor to ensure that threads are
@@ -321,10 +322,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
                   thread_pool.notify_one();
                 });
 
-            std::vector<enumerator::key> neighs =
-                g.neighbours(v, [&pruned](const enumerator::key u) {
-                  return not pruned.count(u);
-                });
+            std::vector<enumerator::key> neighs = g.neighbours(v, pruned);
             pruned.emplace(v);
 
             {
@@ -377,7 +375,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
               std::ostringstream oss;
               oss << "found clique for " << g.key_to_vertex(v) << " of "
                   << clique.size() << " vertices { ";
-              for (const enumerator::key u : clique) {
+              for (enumerator::key u : clique) {
                 oss << g.key_to_vertex(u) << " ";
               }
               oss << "}";
@@ -423,9 +421,9 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
             log::time_diff(begin, end, log::ansi_colours | log::bold));
 }
 
-bool multithreaded::enlarge_clique_size(const std::uint32_t thread_id,
+bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
                                         mc::size_t &max_clique_size,
-                                        const mc::size_t depth) {
+                                        mc::size_t depth) {
   bool found = false;
   {
     std::shared_lock clique_shared(mtx);
@@ -457,15 +455,13 @@ bool multithreaded::enlarge_clique_size(const std::uint32_t thread_id,
   return found;
 }
 
-void multithreaded::branch_exact(const std::uint32_t thread_id,
-                                 const enumerator::key v,
+void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
                                  std::vector<enumerator::key> &neighs,
                                  std::vector<enumerator::colour> &colours,
                                  std::vector<enumerator::key> &clique,
                                  mc::size_t &max_clique_size,
-                                 const mc::size_t upper_bound,
-                                 std::size_t &num_nodes,
-                                 const mc::size_t depth) {
+                                 mc::size_t upper_bound, std::size_t &num_nodes,
+                                 mc::size_t depth) {
   num_nodes++;
 
   {
@@ -529,11 +525,12 @@ void multithreaded::branch_exact(const std::uint32_t thread_id,
   }
 }
 
-void multithreaded::branch_heuristic(
-    const std::uint32_t thread_id, const enumerator::key v,
-    std::vector<enumerator::key> &neighs, std::vector<enumerator::key> &clique,
-    mc::size_t &max_clique_size, const mc::size_t upper_bound,
-    std::size_t &num_nodes, const mc::size_t depth) {
+void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
+                                     std::vector<enumerator::key> &neighs,
+                                     std::vector<enumerator::key> &clique,
+                                     mc::size_t &max_clique_size,
+                                     ::size_t upper_bound,
+                                     std::size_t &num_nodes, mc::size_t depth) {
   if (upper_bound_reached) {
     return;
   }
@@ -588,7 +585,7 @@ int main(int argc, char *argv[]) {
     const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
     std::ostringstream oss;
     oss << "Max Clique has " << m.size() << " vertices { ";
-    for (const auto &e : m) {
+    for (graph::vertex e : m) {
       oss << e << " ";
     }
     oss << "}";
