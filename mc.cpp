@@ -591,6 +591,7 @@ int main(int argc, char *argv[]) {
     oss << "}";
     log::info(oss.str());
     DELAY();
+	return m;
   };
 
   try {
@@ -598,11 +599,13 @@ int main(int argc, char *argv[]) {
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       log::info("Turn", turn, "/", args::num_turns);
       const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
-      print_clique(clique);
+      const std::set<graph::vertex> clique_set = print_clique(clique);
+	  algo.g.draw(clique_set);
     }
   } catch (const std::exception &e) {
     log::info(e.what());
+	return EXIT_FAILURE;
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }

@@ -607,6 +607,37 @@ public:
     log::print(oss.str());
   }
 
+  void draw(const std::set<graph::vertex> &clique) const {
+    std::set<std::set<graph::vertex>> edges;
+    std::ofstream file("out.dot");
+    file << "digraph {\n"
+            "ratio=fill; overlap=false;\n"
+            "node [width=0.1 height=0.1 fontsize=8 shape=plain];\n"
+            "edge [color=orange penwidth=0.1];\n";
+    for (const auto &tmp : E) {
+      graph::neighbours_set neighs = tmp.second;
+      graph::vertex v = tmp.first;
+      file << v << " [label=" << v << " ";
+      if (clique.count(v) > 0) {
+        file << "shape=circle";
+      }
+      file << "];\n";
+      for (const auto &u : neighs) {
+        if (edges.count({u, v}) > 0) {
+          continue;
+        }
+        edges.emplace(std::set<graph::vertex>{u, v});
+        file << v << " -> " << u << "[arrowhead=none ";
+        if (clique.count(u) > 0 && clique.count(v) > 0) {
+          file << " color=black penwidth=0.7";
+        }
+        file << "];\n";
+      }
+    }
+    file << "}\n";
+    file.close();
+  }
+
   std::vector<colour> greedy_colour_sort(std::vector<key> &neighs) const;
 
   bool is_clique(const std::vector<key> &clique) const;
