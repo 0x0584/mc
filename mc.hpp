@@ -92,8 +92,7 @@ struct log {
     return oss.str();
   }
 
-  static inline std::string progress(const std::size_t index,
-                                     const std::size_t size) {
+  static inline std::string progress(std::size_t index, std::size_t size) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(2) << std::left
         << ((double(index + 1) * 100 / size)) << "%";
@@ -293,7 +292,7 @@ struct input {
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
 
-  inline bool is_maximal_size(const std::size_t clique_size) const {
+  inline bool is_maximal_size(std::size_t clique_size) const {
     return not args::expect_size || clique_size >= args::size;
   }
 
@@ -402,6 +401,9 @@ private:
 };
 
 struct graph {
+  // this is a primitive type, ins case of a change in the implementation
+  // since some parts of the code should be updated to avoid overhead of
+  // copying the  objects rather than either referencing them or moving them
   using vertex = unsigned;
 
   using neighbours_set = std::unordered_set<vertex>;
@@ -422,7 +424,7 @@ struct graph {
     return *this;
   }
 
-  inline const neighbours_set &neighbours(const vertex v) const {
+  inline const neighbours_set &neighbours(vertex v) const {
     assert(A.count(v));
     return A.at(v);
   }
@@ -437,7 +439,7 @@ struct graph {
         << " Graph (vertices=" << A.size() << ", edges=" << edge_count << ")\n";
     for (const auto &[v, neighs] : A) {
       oss << v << " { ";
-      for (const auto &u : neighs) {
+      for (vertex u : neighs) {
         oss << u << " ";
       }
       oss << "}\n";
@@ -543,6 +545,9 @@ private:
 // std::unordered_map within the graph, it acts also as a handler of vertices
 // for colouring and inducing vertex-neighbourhood
 struct enumerator {
+  // this is a premitive type too, same as graph::vertex so changes in the
+  // implementation are required in order to avoid overhead of copying
+  // instead of using references or moving the object
   using key = unsigned;
   using colour = unsigned;
   using adjacency_vector =
@@ -551,37 +556,37 @@ struct enumerator {
 public:
   enumerator();
 
-  inline graph::vertex key_to_vertex(const mc::size_t index) const {
+  inline graph::vertex key_to_vertex(mc::size_t index) const {
     assert(index < vertex_count());
     return E[index].first;
   }
 
-  inline std::vector<key> neighbourhood(const key v,
+  inline std::vector<key> neighbourhood(key v,
                                         const std::vector<key> &neighs) const {
     assert(v < vertex_count());
     std::vector<key> new_neighs;
     new_neighs.reserve(neighs.size());
-    std::copy_if(neighs.cbegin(), neighs.cend(), std::back_inserter(new_neighs),
+    std::copy_if(neighs.begin(), neighs.end(), std::back_inserter(new_neighs),
                  // neighbours of both vertices u and v
-                 [this, v](const key u) { return B[v][u]; });
+                 [this, v](key u) { return B[v][u]; });
     return new_neighs;
   }
 
-  inline std::vector<key>
-  neighbours(const key v, std::function<bool(const key)> &&probe) const {
+  inline std::vector<key> neighbours(key v,
+                                     std::unordered_set<key> &pruned) const {
     assert(v < vertex_count());
     std::vector<key> neighs;
-    neighs.reserve(A[v].size());
-    std::copy_if(A[v].cbegin(), A[v].cend(), std::back_inserter(neighs),
-                 [&probe](const key u) { return probe(u); });
+    neighs.reserve(A.at(v).size());
+    std::copy_if(A.at(v).begin(), A.at(v).end(), std::back_inserter(neighs),
+                 [&pruned](key u) { return not pruned.count(u); });
     return neighs;
   }
 
   inline std::vector<graph::vertex>
   unfold_keys(const std::vector<key> &keys) const {
     std::vector<graph::vertex> vertices(keys.size());
-    std::transform(std::execution::par_unseq, keys.cbegin(), keys.cend(),
-                   vertices.begin(), [this](const key v) {
+    std::transform(std::execution::par_unseq, keys.begin(), keys.end(),
+                   vertices.begin(), [this](key v) {
                      assert(v < vertex_count());
                      return key_to_vertex(v);
                    });
@@ -593,7 +598,7 @@ public:
     oss << "Enumerated Vertices\n";
     for (const auto &[v, neighs] : E) {
       oss << v << " { ";
-      for (const auto &u : neighs) {
+      for (graph::vertex u : neighs) {
         oss << u << " ";
       }
       oss << "}\n";
@@ -648,22 +653,21 @@ private:
 
   void solution(flavour algo, mc::size_t upper_bound);
 
-  bool enlarge_clique_size(const std::uint32_t thread_id,
-                           mc::size_t &max_clique_size, const mc::size_t depth);
+  bool enlarge_clique_size(std::uint32_t thread_id, mc::size_t &max_clique_size,
+                           mc::size_t depth);
 
-  void branch_exact(const std::uint32_t thread_id, const enumerator::key v,
+  void branch_exact(std::uint32_t thread_id, enumerator::key v,
                     std::vector<enumerator::key> &neighs,
                     std::vector<enumerator::colour> &colours,
                     std::vector<enumerator::key> &clique,
-                    mc::size_t &max_clique_size, const mc::size_t upper_bound,
-                    std::size_t &num_nodes, const mc::size_t depth = 1);
+                    mc::size_t &max_clique_size, mc::size_t upper_bound,
+                    std::size_t &num_nodes, mc::size_t depth = 1);
 
-  void branch_heuristic(const std::uint32_t thread_id, const enumerator::key v,
+  void branch_heuristic(std::uint32_t thread_id, enumerator::key v,
                         std::vector<enumerator::key> &neighs,
                         std::vector<enumerator::key> &clique,
-                        mc::size_t &max_clique_size,
-                        const mc::size_t upper_bound, std::size_t &num_nodes,
-                        const mc::size_t depth = 1);
+                        mc::size_t &max_clique_size, mc::size_t upper_bound,
+                        std::size_t &num_nodes, mc::size_t depth = 1);
 
 public:
   static inline mc::size_t no_upper_bound = -1u;
