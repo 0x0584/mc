@@ -3,34 +3,36 @@
 namespace mc {
 enumerator::enumerator() {
   graph_builder builder;
-  G = builder.build();
+  graph G = builder.build();
+
+  const std::size_t vertex_count = G.adjacency().size();
 
   auto begin = std::chrono::high_resolution_clock::now();
 
   // compute the neighbourhood degrees of all vertices for which they shall be
   // sorted based on their degeneracy
   std::unordered_map<graph::vertex, std::size_t> neighs_degree;
-  container_reserve_memory(neighs_degree, vertex_count());
+  container_reserve_memory(neighs_degree, vertex_count);
   std::for_each(
-      std::execution::par_unseq, mc_const_range(G.A),
-      [&neighs_degree, this](const graph::adjacency_map::value_type &e) {
+      std::execution::par_unseq, G.A.cbegin(), G.A.cend(),
+      [&neighs_degree, &G](const graph::adjacency_map::value_type &e) {
         neighs_degree[e.first] =
-            std::accumulate(mc_const_range(e.second), 0ul,
-                            [this](std::size_t total_degrees, graph::vertex u) {
+            std::accumulate(e.second.cbegin(), e.second.cend(), 0ul,
+                            [&G](std::size_t total_degrees, graph::vertex u) {
                               return G.neighbours(u).size() + total_degrees;
                             });
       });
 
   // switch the vertex container from std::unordered_map to std::vector
-  adj_lst_orig.resize(vertex_count());
-  std::transform(std::execution::par_unseq, mc_range(G.A), adj_lst_orig.begin(),
+  E.resize(vertex_count);
+  std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), E.begin(),
                  [](graph::adjacency_map::value_type &e) {
                    return std::make_pair(e.first, std::move(e.second));
                  });
 
   // sort vertices based on the degree of their adjacency as it was proven
   // that it makes colouring vertices optimal (as close to brute-forced)
-  std::sort(std::execution::par_unseq, mc_range(adj_lst_orig),
+  std::sort(std::execution::par_unseq, E.begin(), E.end(),
             [&](const adjacency_vector::value_type &v,
                 const adjacency_vector::value_type &u) {
               return (u.second.size() < v.second.size() ||
@@ -41,36 +43,38 @@ enumerator::enumerator() {
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
   std::unordered_map<graph::vertex, key> mapping;
-  container_reserve_memory(mapping, vertex_count());
-  B.resize(vertex_count());
-  std::for_each(std::execution::par_unseq, mc_range(B),
-                [this](std::vector<bool> &mtx) { mtx.resize(vertex_count()); });
-  A.resize(vertex_count());
-  for (key v = 0; v < vertex_count(); ++v) {
+  container_reserve_memory(mapping, vertex_count);
+  B.resize(vertex_count);
+  std::for_each(
+      std::execution::par_unseq, B.begin(), B.end(),
+      [vertex_count](std::vector<bool> &mtx) { mtx.resize(vertex_count); });
+  A.resize(vertex_count);
+  for (key v = 0; v < vertex_count; ++v) {
     const adjacency_vector::value_type &v_pair =
-        adj_lst_orig[v]; // a pair of vertex its neighbours
+        E[v]; // a pair of vertex its neighbours
     mapping.emplace(v_pair.first, v);
     A[v].resize(v_pair.second.size());
   }
 
   // fill vertex adjacency and sort neighbours based on the induced order
-  for (key v = 0; v < vertex_count(); ++v) {
-    const graph::neighbours_set &neighs = adj_lst_orig[v].second;
+  for (key v = 0; v < vertex_count; ++v) {
+    const graph::neighbours_set &neighs = E[v].second;
     std::vector<bool> &v_mtx = B[v];
     // induce the indices of neighbours based on the mapping order
-    std::transform(std::execution::par_unseq, mc_const_range(neighs),
+    std::transform(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
                    A[v].begin(), [&v_mtx, &mapping](const graph::vertex u) {
                      key u_key = mapping.at(u);
                      v_mtx[u_key] = true;
                      return u_key;
                    });
     // then sort them too based on their induced indices for optimal colouring
-    std::sort(std::execution::par_unseq, mc_range(A[v]));
+    std::sort(std::execution::par_unseq, A[v].begin(), A[v].end());
   }
 
   auto end = std::chrono::high_resolution_clock::now();
   log::info("Vertices were enumerated in",
             log::time_diff(begin, end, log::bold));
+
   DELAY();
 }
 
@@ -95,7 +99,7 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
     //
     // although, since using an adjacency matrix is optimal for probing, this
     // would be far less overhead expense that justifies the memory footprint
-    while (std::any_of(mc_const_range(col_class[col]),
+    while (std::any_of(col_class[col].cbegin(), col_class[col].cend(),
                        [&v_mtx](const key u) { return v_mtx[u]; })) {
       col++;
     }
@@ -109,7 +113,8 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
   for (colour col = 0; col < col_class.size(); ++col) {
     std::fill_n(std::back_inserter(colours), col_class[col].size(), col + 1);
     // moving/appending the vertices is cheaper than std::copy_n
-    std::move(mc_range(col_class[col]), std::back_inserter(neighs));
+    std::move(col_class[col].begin(), col_class[col].end(),
+              std::back_inserter(neighs));
   }
 
   return colours;
@@ -119,8 +124,8 @@ bool enumerator::is_clique(const std::vector<key> &clique) const {
   for (const key v : clique) {
     for (const key u : clique) {
       if (const std::vector<key> &neighs = A[u]; v != u) {
-        if (std::find(std::execution::par_unseq, mc_const_range(neighs), v) ==
-            neighs.end()) {
+        if (std::find(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
+                      v) == neighs.cend()) {
           return false;
         }
       }
@@ -168,8 +173,6 @@ std::vector<graph::vertex> multithreaded::solve(flavour algo,
   upper_bound_reached = false;
   holder_thread_id = -1u;
 
-  DELAY();
-
   return clique;
 }
 
@@ -208,7 +211,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
   std::vector<enumerator::key> W(g.vertex_count());
-  std::iota(mc_range(W), 0);
+  std::iota(W.begin(), W.end(), 0);
   //
   // once a vertex is selected, it is pruned after inducing its neighbours
   std::unordered_set<enumerator::key> pruned;
@@ -254,7 +257,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
       // block for available threads
       std::unique_lock thread_lock(thread_mtx);
       thread_pool.wait(thread_lock, [&] {
-        return std::any_of(mc_const_range(available),
+        return std::any_of(available.cbegin(), available.cend(),
                            [](const bool th) { return th; });
       });
     }
@@ -581,11 +584,24 @@ int main(int argc, char *argv[]) {
   log::setup_logger();
   args::parse(argc, argv);
 
+  const auto print_clique = [](const std::vector<graph::vertex> &clique) {
+    const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
+    std::ostringstream oss;
+    oss << "Max Clique has " << m.size() << " vertices { ";
+    for (const auto &e : m) {
+      oss << e << " ";
+    }
+    oss << "}";
+    log::info(oss.str());
+    DELAY();
+  };
+
   try {
     multithreaded algo;
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       log::info("Turn", turn, "/", args::num_turns);
-      algo.solve(args::exec_mode);
+      const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
+      print_clique(clique);
     }
   } catch (const std::exception &e) {
     log::info(e.what());

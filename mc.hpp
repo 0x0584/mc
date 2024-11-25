@@ -41,9 +41,6 @@ using namespace std::chrono_literals;
 #include <unordered_set>
 #include <vector>
 
-#define mc_range(cont) (cont).begin(), (cont).end()
-#define mc_const_range(cont) (cont).cbegin(), (cont).cend()
-
 //#define NDEBUG
 
 #include <cassert>
@@ -399,7 +396,6 @@ private:
     return {read, in->gcount()};
   }
 
-  std::size_t reads = 0;
   input in;
   buffer remaining{};
   buffer::iterator tail_remaining;
@@ -475,7 +471,7 @@ struct graph_builder {
     auto begin = std::chrono::high_resolution_clock::now();
 
     do {
-      Q.emplace_back(std::move(std::async(
+      Q.emplace_back(std::async(
           std::launch::deferred,
           [this](const feed::chunk &chunk) {
             auto vertex_alloc = [this](graph::vertex u) {
@@ -516,7 +512,7 @@ struct graph_builder {
               }
             }
           },
-          feed.read_chunk())));
+          feed.read_chunk()));
     } while (feed);
 
     std::for_each(Q.begin(), Q.end(), [](std::future<void> &f) { f.get(); });
@@ -552,14 +548,12 @@ struct enumerator {
   using adjacency_vector =
       std::vector<std::pair<graph::vertex, graph::neighbours_set>>;
 
-  graph G;
-
 public:
   enumerator();
 
   inline graph::vertex key_to_vertex(const mc::size_t index) const {
     assert(index < vertex_count());
-    return adj_lst_orig[index].first;
+    return E[index].first;
   }
 
   inline std::vector<key> neighbourhood(const key v,
@@ -567,11 +561,9 @@ public:
     assert(v < vertex_count());
     std::vector<key> new_neighs;
     new_neighs.reserve(neighs.size());
-    for (const key u : neighs) {
-      if (B[v][u]) { // neighbours of both vertices u and v
-        new_neighs.emplace_back(u);
-      }
-    }
+    std::copy_if(neighs.cbegin(), neighs.cend(), std::back_inserter(new_neighs),
+                 // neighbours of both vertices u and v
+                 [this, v](const key u) { return B[v][u]; });
     return new_neighs;
   }
 
@@ -580,39 +572,26 @@ public:
     assert(v < vertex_count());
     std::vector<key> neighs;
     neighs.reserve(A[v].size());
-    for (const key u : A[v]) {
-      if (probe(u)) {
-        neighs.emplace_back(u);
-      }
-    }
+    std::copy_if(A[v].cbegin(), A[v].cend(), std::back_inserter(neighs),
+                 [&probe](const key u) { return probe(u); });
     return neighs;
   }
 
   inline std::vector<graph::vertex>
   unfold_keys(const std::vector<key> &keys) const {
     std::vector<graph::vertex> vertices(keys.size());
-    std::transform(std::execution::par_unseq, mc_const_range(keys),
+    std::transform(std::execution::par_unseq, keys.cbegin(), keys.cend(),
                    vertices.begin(), [this](const key v) {
                      assert(v < vertex_count());
                      return key_to_vertex(v);
                    });
-
-    std::set<graph::vertex> m(mc_const_range(vertices));
-    std::ostringstream oss;
-    oss << "Max Clique has " << m.size() << " vertices { ";
-    for (const auto &e : m) {
-      oss << e << " ";
-    }
-    oss << "}";
-    log::info(oss.str());
-
     return vertices;
   }
 
   void print() const {
     std::ostringstream oss;
     oss << "Enumerated Vertices\n";
-    for (const auto &[v, neighs] : adj_lst_orig) {
+    for (const auto &[v, neighs] : E) {
       oss << v << " { ";
       for (const auto &u : neighs) {
         oss << u << " ";
@@ -627,10 +606,10 @@ public:
 
   bool is_clique(const std::vector<key> &clique) const;
 
-  inline std::size_t vertex_count() const { return G.A.size(); }
+  inline std::size_t vertex_count() const { return E.size(); }
 
 private:
-  adjacency_vector adj_lst_orig;
+  adjacency_vector E; // Enumertaed vertices
 
   template <typename T> using vector_2d = std::vector<std::vector<T>>;
   vector_2d<key> A;  // Adjacency List for fast neighbourhood deduction
@@ -641,9 +620,9 @@ class multithreaded {
 public:
   static inline const mc::size_t maximum_bound = -1u;
 
-private:
   enumerator g;
 
+private:
   // only a single mutex is used to handle the max_clique and its global size,
   // in addition to which thread because the max_clique is updated only when we
   // finished branching, and the size is updated during the branching.  it is
