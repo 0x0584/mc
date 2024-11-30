@@ -316,11 +316,67 @@ struct input {
   std::size_t num_v, num_e;
 };
 
+struct graph {
+  // this is a primitive type, ins case of a change in the implementation
+  // since some parts of the code should be updated to avoid overhead of
+  // copying the  objects rather than either referencing them or moving them
+  using vertex = unsigned;
+
+  using neighbours_set = std::unordered_set<vertex>;
+  using adjacency_map = std::unordered_map<vertex, neighbours_set>;
+
+  friend struct enumerator;
+  friend struct graph_builder;
+
+  graph(const graph &) = default;
+  graph(graph &&) = default;
+  graph() = default;
+
+  graph &operator=(graph &) = delete;
+  graph &operator=(graph &&G) {
+    this->A = std::move(G.A);
+    this->edge_count = G.edge_count;
+    this->undirected = G.undirected;
+    return *this;
+  }
+
+  inline const neighbours_set &neighbours(vertex v) const {
+    assert(A.count(v));
+    return A.at(v);
+  }
+
+  inline const adjacency_map &adjacency() const { return A; }
+
+  inline bool directed() { return not undirected; }
+
+  void print() const {
+    std::ostringstream oss;
+    oss << (undirected ? "Undirected" : "Directed")
+        << " Graph (vertices=" << A.size() << ", edges=" << edge_count << ")\n";
+    for (const auto &[v, neighs] : A) {
+      oss << v << " { ";
+      for (vertex u : neighs) {
+        oss << u << " ";
+      }
+      oss << "}\n";
+    }
+    oss << "\n";
+    log::print(oss.str());
+  }
+
+private:
+  bool undirected = false;
+  mc::size_t edge_count = 0;
+  adjacency_map A;
+};
+
 struct feed {
-  static inline const std::int64_t CHUNK_SIZE = 16384; // 16KB
-  static inline const char deli = '\n';
+  static inline const std::int64_t CHUNK_SIZE = 16384, LINE_SIZE = 32;
+
+  static inline const char deli = '\n', sep = ' ';
 
   using buffer = std::array<char, CHUNK_SIZE>;
+  using line = std::array<char, LINE_SIZE>;
   using chunk = std::pair<buffer, std::size_t>;
 
   feed(feed &&feed) = delete;
@@ -401,60 +457,6 @@ private:
   buffer::iterator tail_remaining;
 };
 
-struct graph {
-  // this is a primitive type, ins case of a change in the implementation
-  // since some parts of the code should be updated to avoid overhead of
-  // copying the  objects rather than either referencing them or moving them
-  using vertex = unsigned;
-
-  using neighbours_set = std::unordered_set<vertex>;
-  using adjacency_map = std::unordered_map<vertex, neighbours_set>;
-
-  friend struct enumerator;
-  friend struct graph_builder;
-
-  graph(const graph &) = default;
-  graph(graph &&) = default;
-  graph() = default;
-
-  graph &operator=(graph &) = delete;
-  graph &operator=(graph &&G) {
-    this->A = std::move(G.A);
-    this->edge_count = G.edge_count;
-    this->undirected = G.undirected;
-    return *this;
-  }
-
-  inline const neighbours_set &neighbours(vertex v) const {
-    assert(A.count(v));
-    return A.at(v);
-  }
-
-  inline const adjacency_map &adjacency() const { return A; }
-
-  inline bool directed() { return not undirected; }
-
-  void print() const {
-    std::ostringstream oss;
-    oss << (undirected ? "Undirected" : "Directed")
-        << " Graph (vertices=" << A.size() << ", edges=" << edge_count << ")\n";
-    for (const auto &[v, neighs] : A) {
-      oss << v << " { ";
-      for (vertex u : neighs) {
-        oss << u << " ";
-      }
-      oss << "}\n";
-    }
-    oss << "\n";
-    log::print(oss.str());
-  }
-
-private:
-  bool undirected = false;
-  mc::size_t edge_count = 0;
-  adjacency_map A;
-};
-
 struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
@@ -468,6 +470,31 @@ struct graph_builder {
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;
 
+  bool read_single_vertex(graph::vertex &w, std::string::iterator &it,
+                          std::string::iterator end) {
+    auto skip = [end](std::string::iterator &it) {
+      while (it != end && (*it == feed::sep || *it == feed::deli)) {
+        ++it;
+      }
+    };
+    auto read_vertex = [end](std::string::iterator &it) {
+      int limit = 0;
+      while (limit++ < 12 && it != end && *it != feed::sep &&
+             *it != feed::deli) {
+        ++it;
+      }
+    };
+
+    if (skip(it); it != end) {
+      std::string::iterator i = it;
+      read_vertex(it);
+      w = std::atol(std::string{i, it}.c_str());
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   graph build() {
     // TODO: improve reading vertices by finding optimal way to at the same time
     // knmow how many vertices are there and add edges to the graph
@@ -476,29 +503,48 @@ struct graph_builder {
 
     std::deque<feed::chunk> q;
     std::unordered_map<graph::vertex, std::size_t> adj_count;
+    container_reserve_memory(adj_count, feed.num_vertices());
+    std::mutex adj_count_mtx;
 
     do {
       feed::chunk chunk = feed.read_chunk();
       std::string buffer{chunk.first.data(), chunk.second};
       q.push_back(std::move(chunk));
-      std::istringstream iss(std::move(buffer));
-      while (not iss.eof() and not iss.fail() and not iss.bad()) {
-        graph::vertex u, v;
-        iss >> u >> v; // TODO: read by nez linesand put li;it on line size
-        ++adj_count[u];
-		if (G.undirected) {
-		  ++adj_count[v]; 		  // FIXME: throw if duplicated vertex found in input
-		}
-      }
-      if (iss.fail() or iss.bad()) {
-        log::error("bad characters");
-      }
-      // read vertices and figure out hoz ;qny neighbours eqch one hqs
+      Q.emplace_back(std::async(
+          std::launch::deferred,
+          [this, &adj_count, &adj_count_mtx](std::string buffer) {
+            // it it useless to save vertices since we do not know how much
+            // space we need to allocate anyway, that is why we count them first
+            std::string::iterator it = buffer.begin();
+            std::unordered_map<graph::vertex, std::size_t> adj_count_local;
+            int edge_count = 2;
+            for (graph::vertex u, v; edge_count == 2;) {
+              edge_count = read_single_vertex(u, it, buffer.end()) +
+                           read_single_vertex(v, it, buffer.end());
+              if (edge_count != 2) {
+                break;
+              }
+              ++adj_count_local[u];
+              if (G.undirected) {
+                ++adj_count_local[v];
+              }
+            }
+            if (edge_count != 0) {
+              log::error("could not read an edge", edge_count);
+            }
+            std::unique_lock<std::mutex> lock(adj_count_mtx);
+            // to be benchmarked which style is bettter
+            adj_count.insert(adj_count_local.begin(), adj_count_local.end());
+          },
+          std::move(buffer)));
     } while (feed);
 
-	for (auto [v, size] : adj_count) {
-	  container_reserve_memory(G.A[v], size);
-	}
+    std::for_each(Q.begin(), Q.end(), [](std::future<void> &f) { f.get(); });
+    Q.clear();
+
+    for (auto [v, size] : adj_count) {
+      container_reserve_memory(G.A[v], size);
+    }
 
     std::atomic_size_t edge_count{0};
     while (not q.empty()) {
@@ -508,27 +554,14 @@ struct graph_builder {
       Q.emplace_back(std::async(
           std::launch::deferred,
           [this, &edge_count](std::string buffer) {
-            auto edge_add = [this](graph::vertex u, graph::vertex v) {
+            std::string::iterator it = buffer.begin();
+            for (graph::vertex u, v; read_single_vertex(u, it, buffer.end()) &&
+                                     read_single_vertex(v, it, buffer.end());) {
               std::unique_lock lock(graph_mtx);
-              return G.A[u].emplace(v).second;
-            };
-
-            // TODO: implement manual parsing instead of std::istringstream
-            std::istringstream iss(std::move(buffer));
-            while (not iss.eof() && not iss.bad()) {
-              graph::vertex u, v;
-              if (iss >> u; iss.eof()) {
-                log::error("INVALID line; EOF reached");
-              } else if (iss >> v; u == v) {
-                log::info("found cycle for vertex", u);
-              } else {
-                if (not edge_add(u, v)) {
-                  log::info("redundant edge from", u, "to", v);
-                  continue;
-                }
+              if (G.A[u].emplace(v).second) {
                 ++edge_count;
-                if (G.undirected && not edge_add(v, u)) {
-                  log::info("redundant edge from", u, "to", v);
+                if (G.undirected) {
+                  G.A[v].emplace(u);
                 }
               }
             }
