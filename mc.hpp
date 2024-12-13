@@ -196,36 +196,36 @@ struct args {
     std::string filename;
     for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
       switch (ch) {
-      case 'r': // XXX: handle --run N
+      case 'r':
         num_turns = std::max(1l, std::atol(optarg));
         break;
-      case 'i': // XXX: handle --in input.g
+      case 'i':
         stdin = false;
         file = std::ifstream(filename = optarg);
         break;
-      case 'd': // XXX: handle --edge-directed
+      case 'd':
         undirected = false;
         break;
-      case 's': // XXX: handle --size N
+      case 's':
         expect_size = true;
         size = static_cast<std::size_t>(std::atol(optarg));
         log::info("Expecting a Max Clique of size", size);
         break;
-      case 'u': // XXX: handle --upper-bound N
+      case 'u':
         upper_bound = static_cast<std::size_t>(std::atol(optarg));
         log::info("Expected Upper Bound for Max Clique of size", upper_bound);
         break;
-      case 'l': // XXX: handle --lower-bound N
+      case 'l':
         lower_bound = static_cast<std::size_t>(std::atol(optarg));
         log::info("Expected Lower Bound for Max Clique of size", lower_bound);
         break;
-      case 'e': // XXX: handle --exact
+      case 'e':
         if (exec_mode == flavour::heuristic) {
           // just in case both hybrid and excat were specified, run as hybrid
           exec_mode = flavour::exact;
         }
         break;
-      case 'y': // XXX: handle --hybrid
+      case 'y':
         exec_mode = flavour::hybrid;
         break;
       case 'h':
@@ -473,9 +473,6 @@ struct graph_builder {
   }
 
   graph build() {
-    // XXX: the optimal way is to limit the footprint overall and disregard how
-    // many vertices are there
-
     auto begin = std::chrono::high_resolution_clock::now();
 
     do {
@@ -483,11 +480,9 @@ struct graph_builder {
       Q.emplace_back(std::async(
           std::launch::deferred,
           [this](std::string buffer) {
-            // XXX: implement manual parsing instead of std::istringstream
             std::string::iterator it = buffer.begin();
             int vertices_read = 2;
             for (graph::vertex u, v; vertices_read == 2;) {
-              // TODO: set a aueue in case the lock was held
               vertices_read = read_single_vertex(u, it, buffer.end()) +
                               read_single_vertex(v, it, buffer.end());
               if (vertices_read != 2) {
