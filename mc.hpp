@@ -179,12 +179,6 @@ static inline void set_priority(std::thread &th, int policy, int priority) {
 namespace mc {
 using size_t = std::size_t;
 
-template <typename T>
-static inline void container_reserve_memory(T &container, std::size_t size) {
-  container.max_load_factor(0.5);
-  container.reserve(size);
-}
-
 enum struct flavour { exact, heuristic, hybrid };
 
 std::ostream &operator<<(std::ostream &os, flavour algo_type) {
@@ -298,7 +292,7 @@ struct input {
   }
 
   struct fetch_ftor {
-    fetch_ftor(std::string &line) : iss(line) {}
+    explicit fetch_ftor(std::string &line) : iss(line) {}
 
     template <typename T> bool operator()(T &value) {
       if (iss.bad() || iss.eof()) {
@@ -318,24 +312,19 @@ struct input {
 
 struct feed {
   static inline const std::int64_t CHUNK_SIZE = 16384; // 16KB
-  static inline const char deli = '\n';
+  static inline const char deli = '\n', sep = ' ';
 
   using buffer = std::array<char, CHUNK_SIZE>;
-  using chunk = std::pair<buffer, std::size_t>;
 
   feed(feed &&feed) = delete;
   feed(const feed &feed) = delete;
 
-  inline feed() : tail_remaining(remaining.begin()) {
+  explicit inline feed(input &in) : in(in), tail_remaining(remaining.begin()) {
     std::memset(remaining.data(), 0x0, remaining.size());
   }
 
   ~feed() {
     if (tail_remaining != remaining.begin()) {
-      // buffer::difference_type size =
-      //     std::distance(remaining.begin(), tail_remaining);
-      // std::string s{remaining.data(), std::size_t(size)};
-      // log::printv(" ==>>> `", s, "` with size=", size);
       log::error("INVALID file: no NL at the end of the file");
     }
   }
@@ -347,7 +336,7 @@ struct feed {
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }
 
-  chunk read_chunk() {
+  std::string read_chunk() {
     buffer buff;
     const buffer::difference_type size_remaining =
         std::distance(remaining.begin(), tail_remaining);
@@ -368,15 +357,12 @@ struct feed {
                  " exceeded! recompile with a bigger size");
     }
 
-    chunk chunk{std::move(buff), std::distance(buff.begin(), delimiter++)};
+    const std::size_t buffer_size =
+        static_cast<std::size_t>(std::distance(buff.begin(), delimiter++));
     std::move(delimiter, tail_buff, remaining.data());
     tail_remaining = remaining.begin() + std::distance(delimiter, tail_buff);
-    // log::printv(reads++, " remaining=`",
-    //             std::string{remaining.begin(),
-    //                         std::size_t(std::distance(delimiter,
-    //                         tail_buff))},
-    //             "` EOF=", in->eof());
-    return chunk;
+
+    return std::string{std::move(buff.data()), buffer_size};
   }
 
 private:
@@ -407,31 +393,21 @@ struct graph {
   // copying the  objects rather than either referencing them or moving them
   using vertex = unsigned;
 
-  using neighbours_set = std::unordered_set<vertex>;
-  using adjacency_map = std::unordered_map<vertex, neighbours_set>;
+  using neighbours_set = std::pmr::unordered_set<vertex>;
+  using adjacency_map = std::pmr::unordered_map<vertex, neighbours_set>;
 
   friend struct enumerator;
   friend struct graph_builder;
 
-  graph(const graph &) = default;
+  graph(const graph &) = delete;
   graph(graph &&) = default;
-  graph() = default;
-
+  explicit graph(std::pmr::monotonic_buffer_resource &vertices_pool)
+      : A(&vertices_pool) {}
   graph &operator=(graph &) = delete;
-  graph &operator=(graph &&G) {
-    this->A = std::move(G.A);
-    this->edge_count = G.edge_count;
-    this->undirected = G.undirected;
-    return *this;
-  }
+  graph &operator=(graph &&G) = default;
 
-  inline const neighbours_set &neighbours(vertex v) const {
-    assert(A.count(v));
-    return A.at(v);
-  }
-
+  inline const neighbours_set &neighbours(vertex v) const { return A.at(v); }
   inline const adjacency_map &adjacency() const { return A; }
-
   inline bool directed() { return not undirected; }
 
   void print() const {
@@ -459,85 +435,93 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(bool undirected = args::undirected) {
+  explicit graph_builder(input &in,
+                         std::pmr::monotonic_buffer_resource &vertices_pool,
+                         std::pmr::monotonic_buffer_resource &edges_pool,
+                         bool undirected = args::undirected)
+      : feed(in), G(vertices_pool), edges_pool(edges_pool) {
     G.undirected = undirected;
-    container_reserve_memory(G.A, feed.num_vertices());
     Q.reserve(feed.estimate_chunks());
   }
 
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;
 
+  bool read_single_vertex(graph::vertex &w, std::string::iterator &it,
+                          std::string::iterator end) {
+    auto skip = [end](std::string::iterator &it) {
+      while (it != end && (*it == feed::sep || *it == feed::deli)) {
+        ++it;
+      }
+    };
+    auto read_vertex = [end](std::string::iterator &it) {
+      int limit = 0;
+      while (limit++ < 12 && it != end && *it != feed::sep &&
+             *it != feed::deli) {
+        ++it;
+      }
+    };
+
+    if (skip(it); it != end) {
+      std::string::iterator i = it;
+      read_vertex(it);
+      w = std::atol(std::string{i, it}.c_str());
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   graph build() {
-    // TODO: improve reading vertices by finding optimal way to at the same time
-    // knmow how many vertices are there and add edges to the graph
+    // XXX: the optimal way is to limit the footprint overall and disregard how
+    // many vertices are there
 
     auto begin = std::chrono::high_resolution_clock::now();
 
-    std::deque<feed::chunk> q;
-    std::unordered_map<graph::vertex, std::size_t> adj_count;
-
     do {
-      feed::chunk chunk = feed.read_chunk();
-      std::string buffer{chunk.first.data(), chunk.second};
-      q.push_back(std::move(chunk));
-      std::istringstream iss(std::move(buffer));
-      while (not iss.eof() and not iss.fail() and not iss.bad()) {
-        graph::vertex u, v;
-        iss >> u >> v; // TODO: read by nez linesand put li;it on line size
-        ++adj_count[u];
-		if (G.undirected) {
-		  ++adj_count[v]; 		  // FIXME: throw if duplicated vertex found in input
-		}
-      }
-      if (iss.fail() or iss.bad()) {
-        log::error("bad characters");
-      }
-      // read vertices and figure out hoz ;qny neighbours eqch one hqs
-    } while (feed);
-
-	for (auto [v, size] : adj_count) {
-	  container_reserve_memory(G.A[v], size);
-	}
-
-    std::atomic_size_t edge_count{0};
-    while (not q.empty()) {
-      feed::chunk &chunk = q.back();
-      std::string buffer{std::move(chunk.first.data()), chunk.second};
-      q.pop_back();
+      std::string buffer = feed.read_chunk();
       Q.emplace_back(std::async(
           std::launch::deferred,
-          [this, &edge_count](std::string buffer) {
-            auto edge_add = [this](graph::vertex u, graph::vertex v) {
-              std::unique_lock lock(graph_mtx);
-              return G.A[u].emplace(v).second;
-            };
-
-            // TODO: implement manual parsing instead of std::istringstream
-            std::istringstream iss(std::move(buffer));
-            while (not iss.eof() && not iss.bad()) {
-              graph::vertex u, v;
-              if (iss >> u; iss.eof()) {
-                log::error("INVALID line; EOF reached");
-              } else if (iss >> v; u == v) {
+          [this](std::string buffer) {
+            // XXX: implement manual parsing instead of std::istringstream
+            std::string::iterator it = buffer.begin();
+            int vertices_read = 2;
+            for (graph::vertex u, v; vertices_read == 2;) {
+              // TODO: set a aueue in case the lock was held
+              vertices_read = read_single_vertex(u, it, buffer.end()) +
+                              read_single_vertex(v, it, buffer.end());
+              if (vertices_read != 2) {
+                break;
+              } else if (u == v) {
                 log::info("found cycle for vertex", u);
+                continue;
+              }
+
+              std::unique_lock lock(graph_mtx);
+              graph::neighbours_set &u_neighs = G.A[u];
+              if (u_neighs.empty()) {
+                u_neighs = graph::neighbours_set{&edges_pool};
+              }
+              if (u_neighs.emplace(v).second) {
+                ++G.edge_count;
+                if (G.undirected) {
+                  graph::neighbours_set &v_neighs = G.A[v];
+                  if (v_neighs.empty()) {
+                    v_neighs = graph::neighbours_set{&edges_pool};
+                  }
+                  if (not v_neighs.emplace(u).second) {
+                    log::info("redundant edge from", u, "to", v);
+                  }
+                }
               } else {
-                if (not edge_add(u, v)) {
-                  log::info("redundant edge from", u, "to", v);
-                  continue;
-                }
-                ++edge_count;
-                if (G.undirected && not edge_add(v, u)) {
-                  log::info("redundant edge from", u, "to", v);
-                }
+                log::info("redundant edge from", u, "to", v);
               }
             }
           },
           std::move(buffer)));
-    }
+    } while (feed);
     std::for_each(Q.begin(), Q.end(), [](std::future<void> &f) { f.get(); });
 
-    G.edge_count = edge_count;
     auto end = std::chrono::high_resolution_clock::now();
 
     log::info("Graph with", feed.num_vertices(), "vertices and", G.edge_count,
@@ -556,6 +540,7 @@ private:
   std::vector<std::future<void>> Q;
   mc::feed feed;
   graph G;
+  std::pmr::monotonic_buffer_resource &edges_pool;
 };
 
 // vertex wrapper that serves as a medium to access vertices as keys, in order
@@ -573,11 +558,11 @@ struct enumerator {
       std::vector<std::pair<graph::vertex, graph::neighbours_set>>;
 
 public:
-  enumerator();
+  enumerator(graph G);
 
   inline graph::vertex key_to_vertex(mc::size_t index) const {
     assert(index < vertex_count());
-    return E[index].first;
+    return V[index].first;
   }
 
   inline std::vector<key> neighbourhood(key v,
@@ -591,8 +576,8 @@ public:
     return new_neighs;
   }
 
-  inline std::vector<key> neighbours(key v,
-                                     std::unordered_set<key> &pruned) const {
+  inline std::vector<key>
+  neighbours(key v, std::pmr::unordered_set<key> &pruned) const {
     assert(v < vertex_count());
     std::vector<key> neighs;
     neighs.reserve(A.at(v).size());
@@ -615,7 +600,7 @@ public:
   void print() const {
     std::ostringstream oss;
     oss << "Enumerated Vertices\n";
-    for (const auto &[v, neighs] : E) {
+    for (const auto &[v, neighs] : V) {
       oss << v << " { ";
       for (graph::vertex u : neighs) {
         oss << u << " ";
@@ -630,10 +615,10 @@ public:
 
   bool is_clique(const std::vector<key> &clique) const;
 
-  inline std::size_t vertex_count() const { return E.size(); }
+  inline std::size_t vertex_count() const { return V.size(); }
 
 private:
-  adjacency_vector E; // Enumertaed vertices
+  adjacency_vector V; // Enumertaed vertices
 
   template <typename T> using vector_2d = std::vector<std::vector<T>>;
   vector_2d<key> A;  // Adjacency List for fast neighbourhood deduction
@@ -644,7 +629,7 @@ class multithreaded {
 public:
   static inline const mc::size_t maximum_bound = -1u;
 
-  enumerator g;
+  enumerator E;
 
 private:
   // only a single mutex is used to handle the max_clique and its global size,
@@ -691,7 +676,7 @@ private:
 public:
   static inline mc::size_t no_upper_bound = -1u;
 
-  multithreaded() {
+  explicit multithreaded(graph G) : E(std::move(G)) {
     log::info("Number of available Threads", thread::num_threads);
     LONG_DELAY();
   }

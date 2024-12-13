@@ -1,18 +1,21 @@
 #include "mc.hpp"
 
 namespace mc {
-enumerator::enumerator() {
-  graph_builder builder;
-  graph G = builder.build();
-
+enumerator::enumerator(graph G) {
   const std::size_t vertex_count = G.adjacency().size();
 
   auto begin = std::chrono::high_resolution_clock::now();
 
   // compute the neighbourhood degrees of all vertices for which they shall be
   // sorted based on their degeneracy
-  std::unordered_map<graph::vertex, std::size_t> neighs_degree;
-  container_reserve_memory(neighs_degree, vertex_count);
+  const std::size_t neighs_degree_type_size =
+      sizeof(std::unordered_map<graph::vertex, std::size_t>::node_type);
+  std::vector<std::byte> neighs_degree_buffer;
+  neighs_degree_buffer.reserve(neighs_degree_type_size * vertex_count);
+  std::pmr::monotonic_buffer_resource neighs_degree_pool(
+      neighs_degree_buffer.data(), neighs_degree_buffer.size());
+  std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree(
+      &neighs_degree_pool);
   std::for_each(
       std::execution::par_unseq, G.A.cbegin(), G.A.cend(),
       [&neighs_degree, &G](const graph::adjacency_map::value_type &e) {
@@ -24,15 +27,15 @@ enumerator::enumerator() {
       });
 
   // switch the vertex container from std::unordered_map to std::vector
-  E.resize(vertex_count);
-  std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), E.begin(),
+  V.resize(vertex_count);
+  std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), V.begin(),
                  [](graph::adjacency_map::value_type &e) {
                    return std::make_pair(e.first, std::move(e.second));
                  });
 
   // sort vertices based on the degree of their adjacency as it was proven
   // that it makes colouring vertices optimal (as close to brute-forced)
-  std::sort(std::execution::par_unseq, E.begin(), E.end(),
+  std::sort(std::execution::par_unseq, V.begin(), V.end(),
             [&](const adjacency_vector::value_type &v,
                 const adjacency_vector::value_type &u) {
               return (u.second.size() < v.second.size() ||
@@ -42,8 +45,11 @@ enumerator::enumerator() {
 
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
-  std::unordered_map<graph::vertex, key> mapping;
-  container_reserve_memory(mapping, vertex_count);
+
+  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.data(),
+                                                   neighs_degree_buffer.size());
+  std::pmr::unordered_map<graph::vertex, key> mapping(&mapping_pool);
+
   B.resize(vertex_count);
   std::for_each(
       std::execution::par_unseq, B.begin(), B.end(),
@@ -51,14 +57,14 @@ enumerator::enumerator() {
   A.resize(vertex_count);
   for (key v = 0; v < vertex_count; ++v) {
     const adjacency_vector::value_type &v_pair =
-        E[v]; // a pair of vertex its neighbours
+        V[v]; // a pair of vertex its neighbours
     mapping.emplace(v_pair.first, v);
     A[v].resize(v_pair.second.size());
   }
 
   // fill vertex adjacency and sort neighbours based on the induced order
   for (key v = 0; v < vertex_count; ++v) {
-    const graph::neighbours_set &neighs = E[v].second;
+    const graph::neighbours_set &neighs = V[v].second;
     std::vector<bool> &v_mtx = B[v];
     // induce the indices of neighbours based on the mapping order
     std::transform(std::execution::par_unseq, neighs.begin(), neighs.end(),
@@ -142,14 +148,14 @@ std::vector<graph::vertex> multithreaded::solve(flavour algo,
     // TODO: clean up global variables
     overall_size = lower_bound > 0 ? lower_bound - 1 : 0;
     solution(algo, upper_bound);
-  } else if (assert(g.vertex_count()); upper_bound == 1) {
+  } else if (assert(E.vertex_count()); upper_bound == 1) {
     max_clique.emplace_back(0);
   }
 
   // reverse the keys back into vertices, as they were enumerated beforehand
-  std::vector<graph::vertex> clique = g.unfold_keys(max_clique);
+  std::vector<graph::vertex> clique = E.unfold_keys(max_clique);
 
-  if (not g.is_clique(max_clique)) {
+  if (not E.is_clique(max_clique)) {
     throw std::runtime_error("NOT even a clique!!\n");
   }
 
@@ -211,12 +217,17 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
 
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
-  std::vector<enumerator::key> W(g.vertex_count());
+  std::vector<enumerator::key> W(E.vertex_count());
   std::iota(W.begin(), W.end(), 0);
   //
   // once a vertex is selected, it is pruned after inducing its neighbours
-  std::unordered_set<enumerator::key> pruned;
-  container_reserve_memory(pruned, g.vertex_count());
+  std::vector<std::byte> pruned_buffer;
+  pruned_buffer.reserve(sizeof(std::unordered_set<enumerator::key>::node_type) *
+                        E.vertex_count());
+  std::pmr::monotonic_buffer_resource pruned_pool(pruned_buffer.data(),
+                                                  pruned_buffer.size());
+  std::pmr::unordered_set<enumerator::key> pruned(&pruned_pool);
+
   //
   // inducing the neighbours out of the remaining, in fact, must be sequential
   std::mutex read_mtx;
@@ -240,14 +251,14 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
   auto percent_begin = std::chrono::high_resolution_clock::now();
   while (not W.empty() && not abort_search && not upper_bound_reached) {
     auto percent_end = std::chrono::high_resolution_clock::now();
-    const std::size_t percent = g.vertex_count() - W.size();
+    const std::size_t percent = E.vertex_count() - W.size();
 
 #ifdef LOG
     log::info("waiting...", log::progress(percent, g.vertex_count()), "in",
               log::time_diff(begin, percent_end, log::bold));
 #else // minimal console logging
     if (log::duration(percent_begin, percent_end) >= 1.) {
-      log::info(log::progress(percent, g.vertex_count()), "in",
+      log::info(log::progress(percent, E.vertex_count()), "in",
                 log::time_diff(begin, percent_end, log::bold));
     }
 #endif
@@ -279,7 +290,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     }
 
     // sort vertices based on their colours using greedy colouring
-    std::vector<enumerator::colour> colours = g.greedy_colour_sort(W);
+    std::vector<enumerator::colour> colours = E.greedy_colour_sort(W);
     for (std::uint32_t thread_id = 0;
          thread_id < threads.size() && not W.empty() && not abort_search &&
          not upper_bound_reached;
@@ -322,7 +333,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
                   thread_pool.notify_one();
                 });
 
-            std::vector<enumerator::key> neighs = g.neighbours(v, pruned);
+            std::vector<enumerator::key> neighs = E.neighbours(v, pruned);
             pruned.emplace(v);
 
             {
@@ -341,7 +352,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
             }
 
             std::vector<enumerator::colour> colours =
-                g.greedy_colour_sort(neighs);
+                E.greedy_colour_sort(neighs);
             if (colours.back() < max_clique_size) {
 #ifdef LOG
               log::print(g.key_to_vertex(v),
@@ -490,7 +501,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
     neighs.pop_back();
     colours.pop_back();
 
-    std::vector<enumerator::key> new_neighs = g.neighbourhood(u, neighs);
+    std::vector<enumerator::key> new_neighs = E.neighbourhood(u, neighs);
     if (new_neighs.empty() || next_depth == upper_bound) {
       if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
         if (next_depth == upper_bound) {
@@ -502,7 +513,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
       }
     } else {
       std::vector<enumerator::colour> new_colours =
-          g.greedy_colour_sort(new_neighs);
+          E.greedy_colour_sort(new_neighs);
       if (next_depth + new_colours.back() > max_clique_size) {
         branch_exact(thread_id, u, new_neighs, new_colours, clique,
                      max_clique_size, upper_bound, num_nodes, next_depth);
@@ -550,7 +561,7 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
   enumerator::key u = neighs.back();
   neighs.pop_back();
 
-  std::vector<enumerator::key> new_neighs = g.neighbourhood(u, neighs);
+  std::vector<enumerator::key> new_neighs = E.neighbourhood(u, neighs);
   if (new_neighs.empty() || next_depth == upper_bound) {
     if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
       if (next_depth == upper_bound) {
@@ -562,7 +573,7 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
     }
   } else {
     std::vector<enumerator::colour> new_colours =
-        g.greedy_colour_sort(new_neighs);
+        E.greedy_colour_sort(new_neighs);
     if (next_depth + new_colours.back() > max_clique_size) {
       branch_heuristic(thread_id, u, new_neighs, clique, max_clique_size,
                        upper_bound, num_nodes, next_depth);
@@ -573,6 +584,18 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
     clique.emplace_back(v);
   }
 }
+
+void print_clique(const std::vector<graph::vertex> &clique) {
+  const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
+  std::ostringstream oss;
+  oss << "Max Clique has " << m.size() << " vertices { ";
+  for (graph::vertex e : m) {
+    oss << e << " ";
+  }
+  oss << "}";
+  log::info(oss.str());
+  DELAY();
+}
 } // namespace mc
 
 int main(int argc, char *argv[]) {
@@ -581,20 +604,21 @@ int main(int argc, char *argv[]) {
   log::setup_logger();
   args::parse(argc, argv);
 
-  const auto print_clique = [](const std::vector<graph::vertex> &clique) {
-    const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
-    std::ostringstream oss;
-    oss << "Max Clique has " << m.size() << " vertices { ";
-    for (graph::vertex e : m) {
-      oss << e << " ";
-    }
-    oss << "}";
-    log::info(oss.str());
-    DELAY();
-  };
-
   try {
-    multithreaded algo;
+    input in;
+
+    std::vector<std::byte> vertices_buffer;
+    vertices_buffer.reserve(in.num_v * sizeof(graph::adjacency_map::node_type));
+    std::pmr::monotonic_buffer_resource vertices_pool(vertices_buffer.data(),
+                                                      vertices_buffer.size());
+    std::vector<std::byte> edges_buffer;
+    edges_buffer.reserve(in.num_e * sizeof(graph::neighbours_set::node_type));
+    std::pmr::monotonic_buffer_resource edges_pool(edges_buffer.data(),
+                                                   edges_buffer.size());
+    graph_builder builder(in, vertices_pool, edges_pool);
+    graph G = builder.build();
+
+    multithreaded algo(std::move(G));
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       log::info("Turn", turn, "/", args::num_turns);
       const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
