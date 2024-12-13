@@ -1,0 +1,321 @@
+> Reading from brock200-1.mtx
+> Expecting a Max Clique of size 21
+> Source Graph is Undirected with 200 vertices and 14834 edges
+> Graph with 200 vertices and 14834 edges was read in 0.002s
+> Vertices were enumerated in 0.002s
+> Heuristic Algorithm finished! found 19 vertices after 613 branches in 0.013s
+
+> Reading from brock200-3.mtx
+> Expecting a Max Clique of size 15
+> Source Graph is Undirected with 200 vertices and 12048 edges
+> Graph with 200 vertices and 12048 edges was read in 0.007s
+> Vertices were enumerated in 0.002s
+> Heuristic Algorithm finished! found 13 vertices after 383 branches in 0.013s
+
+> Reading from brock400-2.mtx
+> Expecting a Max Clique of size 29
+> Source Graph is Undirected with 400 vertices and 59786 edges
+> Graph with 400 vertices and 59786 edges was read in 0.022s
+> Vertices were enumerated in 0.012s
+> Heuristic Algorithm finished! found 21 vertices after 2078 branches in 0.051s
+
+> Reading from brock400-4.mtx
+> Expecting a Max Clique of size 33
+> Source Graph is Undirected with 400 vertices and 59765 edges
+> Graph with 400 vertices and 59765 edges was read in 0.009s
+> Vertices were enumerated in 0.010s
+> Heuristic Algorithm finished! found 21 vertices after 2098 branches in 0.039s
+
+> Reading from brock800-2.mtx
+> Expecting a Max Clique of size 487
+> Source Graph is Undirected with 800 vertices and 208166 edges
+> Graph with 800 vertices and 208166 edges was read in 0.040s
+> Vertices were enumerated in 0.059s
+> Heuristic Algorithm finished! found 18 vertices after 4136 branches in 0.129s
+
+> Reading from brock800-4.mtx
+> Expecting a Max Clique of size 486
+> Source Graph is Undirected with 800 vertices and 207643 edges
+> Graph with 800 vertices and 207643 edges was read in 0.039s
+> Vertices were enumerated in 0.050s
+> Heuristic Algorithm finished! found 18 vertices after 4069 branches in 0.115s
+
+> Reading from C1000-9.mtx
+> Expecting a Max Clique of size 53
+> Source Graph is Undirected with 1000 vertices and 450079 edges
+> Graph with 1000 vertices and 450079 edges was read in 0.090s
+> Vertices were enumerated in 0.130s
+> Heuristic Algorithm finished! found 54 vertices after 19007 branches in 0.719s
+
+> Reading from C2000-9.mtx
+> Expecting a Max Clique of size 56
+> Source Graph is Undirected with 2000 vertices and 1799532 edges
+> Graph with 2000 vertices and 1799532 edges was read in 0.388s
+> Vertices were enumerated in 0.530s
+> Heuristic Algorithm finished! found 63 vertices after 48162 branches in 4.904s
+
+> Reading from C250-9.mtx
+> Expecting a Max Clique of size 40
+> Source Graph is Undirected with 250 vertices and 27984 edges
+> Graph with 250 vertices and 27984 edges was read in 0.003s
+> Vertices were enumerated in 0.004s
+> Heuristic Algorithm finished! found 42 vertices after 1347 branches in 0.018s
+
+> Reading from ca-AstroPh.mtx
+> Expecting a Max Clique of size 57
+> Source Graph is Undirected with 17903 vertices and 196972 edges
+> Graph with 17903 vertices and 196972 edges was read in 0.074s
+> Vertices were enumerated in 0.085s
+> Heuristic Algorithm finished! found 57 vertices after 71 branches in 0.059s
+
+> Reading from c-fat200-1.mtx
+> Expecting a Max Clique of size 12
+> Source Graph is Undirected with 200 vertices and 1534 edges
+> Graph with 200 vertices and 1534 edges was read in 0.000s
+> Vertices were enumerated in 0.000s
+> Heuristic Algorithm finished! found 12 vertices after 26 branches in 0.003s
+
+> Reading from c-fat200-2.mtx
+> Expecting a Max Clique of size 24
+> Source Graph is Undirected with 200 vertices and 3235 edges
+> Graph with 200 vertices and 3235 edges was read in 0.000s
+> Vertices were enumerated in 0.000s
+> Heuristic Algorithm finished! found 24 vertices after 58 branches in 0.003s
+
+> Reading from c-fat200-5.mtx
+> Expecting a Max Clique of size 58
+> Source Graph is Undirected with 200 vertices and 8473 edges
+> Graph with 200 vertices and 8473 edges was read in 0.001s
+> Vertices were enumerated in 0.001s
+> Heuristic Algorithm finished! found 56 vertices after 74 branches in 0.003s
+
+> Reading from c-fat500-10.mtx
+> Expecting a Max Clique of size 126
+> Source Graph is Undirected with 500 vertices and 46627 edges
+> Graph with 500 vertices and 46627 edges was read in 0.006s
+> Vertices were enumerated in 0.012s
+> Heuristic Algorithm finished! found 126 vertices after 140 branches in 0.005s
+
+> Reading from c-fat500-1.mtx
+> Expecting a Max Clique of size 14
+> Source Graph is Undirected with 500 vertices and 4459 edges
+> Graph with 500 vertices and 4459 edges was read in 0.001s
+> Vertices were enumerated in 0.001s
+> Heuristic Algorithm finished! found 14 vertices after 28 branches in 0.005s
+
+> Reading from c-fat500-2.mtx
+> Expecting a Max Clique of size 26
+> Source Graph is Undirected with 500 vertices and 9139 edges
+> Graph with 500 vertices and 9139 edges was read in 0.001s
+> Vertices were enumerated in 0.001s
+> Heuristic Algorithm finished! found 26 vertices after 40 branches in 0.003s
+
+> Reading from c-fat500-5.mtx
+> Expecting a Max Clique of size 64
+> Source Graph is Undirected with 500 vertices and 23191 edges
+> Graph with 500 vertices and 23191 edges was read in 0.003s
+> Vertices were enumerated in 0.003s
+> Heuristic Algorithm finished! found 62 vertices after 77 branches in 0.003s
+
+> Reading from DSJC500-5.mtx
+> Expecting a Max Clique of size 13
+> Source Graph is Undirected with 500 vertices and 125248 edges
+> Graph with 500 vertices and 62624 edges was read in 0.010s
+> Vertices were enumerated in 0.010s
+> Heuristic Algorithm finished! found 12 vertices after 1306 branches in 0.034s
+
+> Reading from gen200-p0-9-44.mtx
+> Expecting a Max Clique of size 44
+> Source Graph is Undirected with 200 vertices and 17910 edges
+> Graph with 200 vertices and 17910 edges was read in 0.002s
+> Vertices were enumerated in 0.002s
+> Heuristic Algorithm finished! found 36 vertices after 645 branches in 0.007s
+
+> Reading from hamming10-2.mtx
+> Expecting a Max Clique of size 512
+> Source Graph is Undirected with 1024 vertices and 518656 edges
+> Graph with 1024 vertices and 518656 edges was read in 0.068s
+> Vertices were enumerated in 0.110s
+> Heuristic Algorithm finished! found 512 vertices after 891 branches in 0.125s
+
+> Reading from hamming10-4.mtx
+> Expecting a Max Clique of size 35
+> Source Graph is Undirected with 1024 vertices and 434176 edges
+> Graph with 1024 vertices and 434176 edges was read in 0.080s
+> Vertices were enumerated in 0.113s
+> Heuristic Algorithm finished! found 36 vertices after 9432 branches in 0.249s
+
+> Reading from johnson16-2-4.mtx
+> Expecting a Max Clique of size 8
+> Source Graph is Undirected with 120 vertices and 5460 edges
+> Graph with 120 vertices and 5460 edges was read in 0.001s
+> Vertices were enumerated in 0.001s
+> Heuristic Algorithm finished! found 8 vertices after 169 branches in 0.003s
+
+> Reading from johnson32-2-4.mtx
+> Expecting a Max Clique of size 32
+> Source Graph is Undirected with 496 vertices and 107880 edges
+> Graph with 496 vertices and 107880 edges was read in 0.012s
+> Vertices were enumerated in 0.030s
+> Heuristic Algorithm finished! found 16 vertices after 1899 branches in 0.015s
+
+> Reading from johnson8-2-4.mtx
+> Expecting a Max Clique of size 4
+> Source Graph is Undirected with 28 vertices and 210 edges
+> Graph with 28 vertices and 210 edges was read in 0.000s
+> Vertices were enumerated in 0.000s
+> Heuristic Algorithm finished! found 4 vertices after 18 branches in 0.003s
+
+> Reading from johnson8-4-4.mtx
+> Expecting a Max Clique of size 14
+> Source Graph is Undirected with 70 vertices and 1855 edges
+> Graph with 70 vertices and 1855 edges was read in 0.000s
+> Vertices were enumerated in 0.000s
+> Heuristic Algorithm finished! found 14 vertices after 35 branches in 0.003s
+
+> Reading from keller4.mtx
+> Expecting a Max Clique of size 11
+> Source Graph is Undirected with 171 vertices and 9435 edges
+> Graph with 171 vertices and 9435 edges was read in 0.001s
+> Vertices were enumerated in 0.001s
+> Heuristic Algorithm finished! found 11 vertices after 201 branches in 0.004s
+
+> Reading from keller5.mtx
+> Expecting a Max Clique of size 19
+> Source Graph is Undirected with 776 vertices and 225990 edges
+> Graph with 776 vertices and 225990 edges was read in 0.066s
+> Vertices were enumerated in 0.069s
+> Heuristic Algorithm finished! found 27 vertices after 2863 branches in 0.104s
+
+> Reading from keller6.mtx
+> Expecting a Max Clique of size 37
+> Source Graph is Undirected with 3361 vertices and 4619898 edges
+> Graph with 3361 vertices and 4619898 edges was read in 1.594s
+> Vertices were enumerated in 1.728s
+> Heuristic Algorithm finished! found 50 vertices after 38792 branches in 4.087s
+
+> Reading from MANN-a27.mtx
+> Expecting a Max Clique of size 126
+> Source Graph is Undirected with 378 vertices and 70551 edges
+> Graph with 378 vertices and 70551 edges was read in 0.009s
+> Vertices were enumerated in 0.012s
+> Heuristic Algorithm finished! found 126 vertices after 480 branches in 0.008s
+
+> Reading from MANN-a45.mtx
+> Expecting a Max Clique of size 345
+> Source Graph is Undirected with 1035 vertices and 533115 edges
+> Graph with 1035 vertices and 533115 edges was read in 0.078s
+> Vertices were enumerated in 0.121s
+> Heuristic Algorithm finished! found 343 vertices after 989 branches in 0.138s
+
+> Reading from MANN-a9.mtx
+> Expecting a Max Clique of size 16
+> Source Graph is Undirected with 45 vertices and 918 edges
+> Graph with 45 vertices and 918 edges was read in 0.000s
+> Vertices were enumerated in 0.000s
+> Heuristic Algorithm finished! found 16 vertices after 37 branches in 0.001s
+
+> Reading from p-hat1000-1.mtx
+> Expecting a Max Clique of size 10
+> Source Graph is Undirected with 1000 vertices and 122253 edges
+> Graph with 1000 vertices and 122253 edges was read in 0.041s
+> Vertices were enumerated in 0.037s
+> Heuristic Algorithm finished! found 9 vertices after 1351 branches in 0.040s
+
+> Reading from p-hat1000-2.mtx
+> Expecting a Max Clique of size 46
+> Source Graph is Undirected with 1000 vertices and 244799 edges
+> Graph with 1000 vertices and 244799 edges was read in 0.087s
+> Vertices were enumerated in 0.066s
+> Heuristic Algorithm finished! found 36 vertices after 3176 branches in 0.097s
+
+> Reading from p-hat1000-3.mtx
+> Expecting a Max Clique of size 57
+> Source Graph is Undirected with 1000 vertices and 371746 edges
+> Graph with 1000 vertices and 371746 edges was read in 0.103s
+> Vertices were enumerated in 0.116s
+> Heuristic Algorithm finished! found 54 vertices after 8780 branches in 0.260s
+
+> Reading from p-hat1500-1.mtx
+> Expecting a Max Clique of size 12
+> Source Graph is Undirected with 1500 vertices and 284923 edges
+> Graph with 1500 vertices and 284923 edges was read in 0.105s
+> Vertices were enumerated in 0.083s
+> Heuristic Algorithm finished! found 11 vertices after 2263 branches in 0.111s
+
+> Reading from p-hat1500-2.mtx
+> Expecting a Max Clique of size 55
+> Source Graph is Undirected with 1500 vertices and 568960 edges
+> Graph with 1500 vertices and 568960 edges was read in 0.214s
+> Vertices were enumerated in 0.163s
+> Heuristic Algorithm finished! found 49 vertices after 7068 branches in 0.254s
+
+> Reading from p-hat1500-3.mtx
+> Expecting a Max Clique of size 77
+> Source Graph is Undirected with 1500 vertices and 847244 edges
+> Graph with 1500 vertices and 847244 edges was read in 0.294s
+> Vertices were enumerated in 0.242s
+> Heuristic Algorithm finished! found 69 vertices after 16494 branches in 0.737s
+
+> Reading from p-hat300-3.mtx
+> Expecting a Max Clique of size 36
+> Source Graph is Undirected with 300 vertices and 33390 edges
+> Graph with 300 vertices and 33390 edges was read in 0.005s
+> Vertices were enumerated in 0.006s
+> Heuristic Algorithm finished! found 33 vertices after 1063 branches in 0.012s
+
+> Reading from p-hat500-1.mtx
+> Expecting a Max Clique of size 9
+> Source Graph is Undirected with 500 vertices and 31569 edges
+> Graph with 500 vertices and 31569 edges was read in 0.013s
+> Vertices were enumerated in 0.006s
+> Heuristic Algorithm finished! found 8 vertices after 427 branches in 0.013s
+
+> Reading from p-hat500-2.mtx
+> Expecting a Max Clique of size 36
+> Source Graph is Undirected with 500 vertices and 62946 edges
+> Graph with 500 vertices and 62946 edges was read in 0.014s
+> Vertices were enumerated in 0.014s
+> Heuristic Algorithm finished! found 27 vertices after 1015 branches in 0.019s
+
+> Reading from p-hat500-3.mtx
+> Expecting a Max Clique of size 45
+> Source Graph is Undirected with 500 vertices and 93800 edges
+> Graph with 500 vertices and 93800 edges was read in 0.019s
+> Vertices were enumerated in 0.030s
+> Heuristic Algorithm finished! found 41 vertices after 2532 branches in 0.053s
+
+> Reading from p-hat700-1.mtx
+> Expecting a Max Clique of size 11
+> Source Graph is Undirected with 700 vertices and 60999 edges
+> Graph with 700 vertices and 60999 edges was read in 0.014s
+> Vertices were enumerated in 0.015s
+> Heuristic Algorithm finished! found 9 vertices after 674 branches in 0.028s
+
+> Reading from p-hat700-2.mtx
+> Expecting a Max Clique of size 44
+> Source Graph is Undirected with 700 vertices and 121728 edges
+> Graph with 700 vertices and 121728 edges was read in 0.039s
+> Vertices were enumerated in 0.029s
+> Heuristic Algorithm finished! found 34 vertices after 1291 branches in 0.031s
+
+> Reading from p-hat700-3.mtx
+> Expecting a Max Clique of size 55
+> Source Graph is Undirected with 700 vertices and 183010 edges
+> Graph with 700 vertices and 183010 edges was read in 0.062s
+> Vertices were enumerated in 0.048s
+> Heuristic Algorithm finished! found 47 vertices after 4797 branches in 0.106s
+
+> Reading from san1000.mtx
+> Expecting a Max Clique of size 15
+> Source Graph is Undirected with 1000 vertices and 250500 edges
+> Graph with 1000 vertices and 250500 edges was read in 0.061s
+> Vertices were enumerated in 0.067s
+> Heuristic Algorithm finished! found 10 vertices after 547 branches in 0.035s
+
+> Reading from soc-slashdot.mtx
+> Expecting a Max Clique of size 26
+> Source Graph is Undirected with 70068 vertices and 358647 edges
+> Graph with 70068 vertices and 358647 edges was read in 0.215s
+> Vertices were enumerated in 0.375s
+> Heuristic Algorithm finished! found 26 vertices after 105 branches in 1.394s
