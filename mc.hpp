@@ -193,7 +193,6 @@ std::ostream &operator<<(std::ostream &os, flavour algo_type) {
 
 struct args {
   static void parse(int argc, char *argv[]) {
-    std::string filename;
     for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
       switch (ch) {
       case 'r':
@@ -261,6 +260,7 @@ struct args {
   static inline long num_turns = 100;
   static inline bool expect_size, undirected = true, stdin = true;
   static inline std::size_t size = -1u, upper_bound = -1u, lower_bound = 1;
+  static inline std::string filename;
 
   static inline flavour exec_mode = flavour::heuristic;
 };
@@ -606,6 +606,38 @@ public:
     log::print(oss.str());
   }
 
+  void draw(const std::vector<graph::vertex> &clq) const {
+    std::set<graph::vertex> clique(clq.begin(), clq.end());
+    std::set<std::set<graph::vertex>> edges;
+    std::ofstream file((args::stdin ? "out" : args::filename) + ".dot");
+    file << "digraph {\n"
+            "ratio=fill; overlap=false;\n"
+            "node [width=0.1 height=0.1 fontsize=8 shape=plain];\n"
+            "edge [color=orange penwidth=0.1];\n";
+    for (const auto &tmp : V) {
+      graph::neighbours_set neighs = tmp.second;
+      graph::vertex v = tmp.first;
+      file << v << " [label=" << v << " ";
+      if (clique.count(v) > 0) {
+        file << "shape=circle";
+      }
+      file << "];\n";
+      for (const auto &u : neighs) {
+        if (edges.count({u, v}) > 0) {
+          continue;
+        }
+        edges.emplace(std::set<graph::vertex>{u, v});
+        file << v << " -> " << u << "[arrowhead=none ";
+        if (clique.count(u) > 0 && clique.count(v) > 0) {
+          file << " color=black penwidth=0.7";
+        }
+        file << "];\n";
+      }
+    }
+    file << "}\n";
+    file.close();
+  }
+
   std::vector<colour> greedy_colour_sort(std::vector<key> &neighs) const;
 
   bool is_clique(const std::vector<key> &clique) const;
@@ -683,6 +715,8 @@ public:
         // to be at compile time, it is dynamic initialisation
         mc::size_t lower_bound = args::lower_bound,
         mc::size_t upper_bound = args::upper_bound);
+
+  void draw(const std::vector<graph::vertex> &clique) { E.draw(clique); }
 };
 } // namespace mc
 #endif // MAXCLIQUE_HPP

@@ -2,7 +2,10 @@
 #+EMAIL: archid-@student.1337.ma
 
 * About
-  - compile using =make=
+  [[file:c-fat200-1.mtx.png][c-fat200-1.mtx.png]]
+
+  - compile using =make RELEASE=1 DEBUG=0 THREADS=8 clean mc=
+  - to visualise the graph and the clique use =sfdp out.dot -odata.png -Tpng=
   - run program and use =-h= to see the arguments
 
 * Max Click Problem
