@@ -1,6 +1,7 @@
 \documentclass[•]{article}
+\usepackage[standard]{ntheorem}
 
-\title{Optimal Parallel Max Clique branch-and-bound algorithm}
+\title{Multithreaded Max-Clique}
 \author{Anas Rchid\\ \texttt{archid@student.1337.ma}}
 \date{Fall 2022}
 
@@ -8,25 +9,31 @@
 \maketitle
 
 \section*{Abstract}
+In this paper, we shall look at two state-of-the-art algorithms (in my humble opinion) for finding maximum clique in a finite graph. They use different characteristics of graph to find the clique, one uses k-core numbers and the other vertex colouring. I had implemented both algorithms and I shall present my findings about how well the implementation is feasible. I had implemented everything in C++17 and used a bit fancy techniques that I shall get into in this paper.
 
-\section{Graph terminology}
-\begin{list}
-\item \textit{Adjacency List} is when we represent the graph $G$ as vertices where we prefer to have the information about the neighbours of a certain vertex $v$ but we prioritise space over time trade off.  It is worth noting that this approach can be helpful when the $G$ is enormous.
-\end{list}
-\subsection{Graphs}
+\section{Definitions}
 
-\subsection{Graph Colouring}
+\begin{definition}[Graph in a mathematical sense]
+  A graph $G = \{V, E\}$ is a pair of two sets. The set $V = \{v ; \forall v \in \Omega\}$ is called the set of vertices (or nodes), they represent endpoints in themselves, while the set $E = \{( u,v); \forall u, v \in V\}$ is the set of edges (or links) which are like a binary-relationship between any pair of vertices in the graph.
 
-\subsection{Complete Graphs}
+\end{definition}
+That was the mathematical definition, programmatically though, we represent the
+
+\subsection{Terminology}
+
+\paragraph{Adjacency List} is when we represent the graph $G$ as vertices where we prefer to have the information about the neighbours of a certain vertex $v$ but we prioritise space over time trade off.  It is worth noting that this approach can be helpful when the $G$ is enormous.
+
+\paragraph{Adjacency Matrix}
+
+\subsection{Complete Graph}
 \paragraph{Clique}
+\paragraph{Colour}
 
 \section{Algorithm}
-
 \subsection{Pseudo-code}
-
 \subsection{Analysis}
 
-\subsection{Parallel Implementation}
+\section{Parallel Implementation}
 
 \section{References}
 
