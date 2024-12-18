@@ -254,7 +254,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     const std::size_t percent = E.vertex_count() - W.size();
 
 #ifdef LOG
-    log::info("waiting...", log::progress(percent, g.vertex_count()), "in",
+    log::info("waiting...", log::progress(percent, E.vertex_count()), "in",
               log::time_diff(begin, percent_end, log::bold));
 #else // minimal console logging
     if (log::duration(percent_begin, percent_end) >= 1.) {
@@ -307,7 +307,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
 
       if (colours.back() <= current_max_clique_size) {
 #ifdef LOG
-        log::print(g.key_to_vertex(W.back()),
+        log::print(E.key_to_vertex(W.back()),
                    "has insufficient colours. abort search!");
 #endif
         abort_search = true;
@@ -344,7 +344,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
 
             if (neighs.empty()) {
 #ifdef LOG
-              log::print(g.key_to_vertex(v),
+              log::print(E.key_to_vertex(v),
                          "has no neighbours. abort search!");
 #endif
               abort_search = true;
@@ -355,7 +355,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
                 E.greedy_colour_sort(neighs);
             if (colours.back() < max_clique_size) {
 #ifdef LOG
-              log::print(g.key_to_vertex(v),
+              log::print(E.key_to_vertex(v),
                          "has insufficient colours. abort search!");
 #endif
               abort_search = true;
@@ -363,7 +363,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
             }
 
 #ifdef LOG
-            log::print_thread(thread_id, "branching on", g.key_to_vertex(v),
+            log::print_thread(thread_id, "branching on", E.key_to_vertex(v),
                               "with", neighs.size(), "neighbours of",
                               colours.back(), "colours");
             auto begin = std::chrono::high_resolution_clock::now();
@@ -384,10 +384,10 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
                 thread_id == holder_thread_id) {
 #ifdef LOG
               std::ostringstream oss;
-              oss << "found clique for " << g.key_to_vertex(v) << " of "
+              oss << "found clique for " << E.key_to_vertex(v) << " of "
                   << clique.size() << " vertices { ";
               for (enumerator::key u : clique) {
-                oss << g.key_to_vertex(u) << " ";
+                oss << E.key_to_vertex(u) << " ";
               }
               oss << "}";
               log::print_thread(thread_id, oss.str());
@@ -400,7 +400,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
 
 #ifdef LOG
             auto end = std::chrono::high_resolution_clock::now();
-            log::print_thread(thread_id, "done with", g.key_to_vertex(v),
+            log::print_thread(thread_id, "done with", E.key_to_vertex(v),
                               "after", num_nodes, "branches took",
                               log::time_diff(begin, end, log::bold));
 #endif
@@ -622,12 +622,12 @@ int main(int argc, char *argv[]) {
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       log::info("Turn", turn, "/", args::num_turns);
       const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
-	  print_clique(clique);
-	  algo.draw(clique);
+      print_clique(clique);
+      algo.draw(clique);
     }
   } catch (const std::exception &e) {
     log::info(e.what());
-	return EXIT_FAILURE;
+    return EXIT_FAILURE;
   }
 
   return EXIT_SUCCESS;
