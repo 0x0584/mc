@@ -7,3 +7,7 @@ build
 *~
 \#*\#
 TAGS
+.vscode/
+*.dot
+*.o
+mc
