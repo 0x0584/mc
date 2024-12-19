@@ -14,7 +14,8 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
+// USA.
 
 #include "mc.hpp"
 
@@ -28,10 +29,12 @@ enumerator::enumerator(graph G) {
   // sorted based on their degeneracy
   const std::size_t neighs_degree_type_size =
       sizeof(std::unordered_map<graph::vertex, std::size_t>::node_type);
-  std::vector<std::byte> neighs_degree_buffer;
-  neighs_degree_buffer.reserve(neighs_degree_type_size * vertex_count);
+  const std::size_t neighs_degree_buffer_size =
+      neighs_degree_type_size * vertex_count;
+  auto neighs_degree_buffer =
+      std::make_unique<std::byte[]>(neighs_degree_buffer_size);
   std::pmr::monotonic_buffer_resource neighs_degree_pool(
-      neighs_degree_buffer.data(), neighs_degree_buffer.size());
+      neighs_degree_buffer.get(), neighs_degree_buffer_size);
   std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree(
       &neighs_degree_pool);
   std::for_each(
@@ -64,8 +67,8 @@ enumerator::enumerator(graph G) {
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
 
-  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.data(),
-                                                   neighs_degree_buffer.size());
+  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.get(),
+                                                   neighs_degree_buffer_size);
   std::pmr::unordered_map<graph::vertex, key> mapping(&mapping_pool);
 
   B.resize(vertex_count);
@@ -239,11 +242,11 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
   std::iota(W.begin(), W.end(), 0);
   //
   // once a vertex is selected, it is pruned after inducing its neighbours
-  std::vector<std::byte> pruned_buffer;
-  pruned_buffer.reserve(sizeof(std::unordered_set<enumerator::key>::node_type) *
-                        E.vertex_count());
-  std::pmr::monotonic_buffer_resource pruned_pool(pruned_buffer.data(),
-                                                  pruned_buffer.size());
+  const std::size_t pruned_buffer_size =
+      sizeof(std::unordered_set<enumerator::key>::node_type) * E.vertex_count();
+  auto pruned_buffer = std::make_unique<std::byte[]>(pruned_buffer_size);
+  std::pmr::monotonic_buffer_resource pruned_pool(pruned_buffer.get(),
+                                                  pruned_buffer_size);
   std::pmr::unordered_set<enumerator::key> pruned(&pruned_pool);
 
   //
@@ -625,14 +628,16 @@ int main(int argc, char *argv[]) {
   try {
     input in;
 
-    std::vector<std::byte> vertices_buffer;
-    vertices_buffer.reserve(in.num_v * sizeof(graph::adjacency_map::node_type));
-    std::pmr::monotonic_buffer_resource vertices_pool(vertices_buffer.data(),
-                                                      vertices_buffer.size());
-    std::vector<std::byte> edges_buffer;
-    edges_buffer.reserve(in.num_e * sizeof(graph::neighbours_set::node_type));
-    std::pmr::monotonic_buffer_resource edges_pool(edges_buffer.data(),
-                                                   edges_buffer.size());
+    const std::size_t vertices_buffer_size =
+        in.num_v * sizeof(graph::adjacency_map::node_type);
+    auto vertices_buffer = std::make_unique<std::byte[]>(vertices_buffer_size);
+    std::pmr::monotonic_buffer_resource vertices_pool(vertices_buffer.get(),
+                                                      vertices_buffer_size);
+    const std::size_t edges_buffer_size =
+        in.num_e * sizeof(graph::neighbours_set::node_type);
+    auto edges_buffer = std::make_unique<std::byte[]>(edges_buffer_size);
+    std::pmr::monotonic_buffer_resource edges_pool(edges_buffer.get(),
+                                                   edges_buffer_size);
     graph_builder builder(in, vertices_pool, edges_pool);
     graph G = builder.build();
 
