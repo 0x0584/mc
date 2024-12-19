@@ -101,8 +101,6 @@ enumerator::enumerator(graph G) {
   auto end = std::chrono::high_resolution_clock::now();
   log::info("Vertices were enumerated in",
             log::time_diff(begin, end, log::bold));
-
-  DELAY();
 }
 
 std::vector<enumerator::colour>
@@ -615,7 +613,6 @@ void print_clique(const std::vector<graph::vertex> &clique) {
   }
   oss << "}";
   log::info(oss.str());
-  DELAY();
 }
 } // namespace mc
 
@@ -646,7 +643,9 @@ int main(int argc, char *argv[]) {
       log::info("Turn", turn, "/", args::num_turns);
       const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
       print_clique(clique);
-      algo.draw(clique);
+      if (args::draw) {
+        algo.draw(clique);
+      }
     }
   } catch (const std::exception &e) {
     log::info(e.what());

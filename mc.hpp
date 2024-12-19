@@ -14,29 +14,11 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
-// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
+// USA.
 
 #ifndef MAXCLIQUE_HPP
 #define MAXCLIQUE_HPP
-
-#define LITERAL(expr) #expr
-#define EMPTY_MACRO                                                            \
-  do {                                                                         \
-  } while (false)
-
-#ifndef LOG
-#define DELAY() EMPTY_MACRO
-#define LONG_DELAY() EMPTY_MACRO
-#else
-#ifndef PAUSE_LONG_DELAY
-#define PAUSE_LONG_DELAY 3s
-#endif // PAUSE_DELAY_LONG
-#ifndef PAUSE_DELAY
-#define PAUSE_DELAY 2s
-#endif // PAUSE_DELAY
-#define LONG_DELAY() std::this_thread::sleep_for(PAUSE_LONG_DELAY)
-#define DELAY() std::this_thread::sleep_for(PAUSE_DELAY)
-#endif // LOG
 
 #include <atomic>
 #include <chrono>
@@ -60,7 +42,7 @@ using namespace std::chrono_literals;
 #include <unordered_set>
 #include <vector>
 
-//#define NDEBUG
+// #define NDEBUG
 
 #include <cassert>
 #include <climits>
@@ -245,6 +227,9 @@ struct args {
       case 'y':
         exec_mode = flavour::hybrid;
         break;
+      case 'o':
+        draw = true;
+        break;
       case 'h':
       case ':':
       case '?':
@@ -257,6 +242,7 @@ struct args {
             << "  -l N expect at least a clique of size N\n"
             << "  -e run the algorithm as EXACT (default HEURISTIC)\n"
             << "  -y run the algorithm as HYBRID (HEURISTIC + EXACT)\n"
+            << "  -o output a Graphiz Dot file of the graph and the clique"
             << "  -d use DIRECTED edges instead of the default UNDIRECTED\n"
             << "\n";
         exit(EXIT_FAILURE);
@@ -279,6 +265,7 @@ struct args {
   static inline bool expect_size, undirected = true, stdin = true;
   static inline std::size_t size = -1u, upper_bound = -1u, lower_bound = 1;
   static inline std::string filename;
+  static inline bool draw = false;
 
   static inline flavour exec_mode = flavour::heuristic;
 };
@@ -543,8 +530,6 @@ struct graph_builder {
     assert(G.A.size() == feed.num_vertices());
     assert(G.edge_count == feed.num_edges());
 
-    LONG_DELAY();
-
     return std::move(G);
   }
 
@@ -626,32 +611,49 @@ public:
 
   void draw(const std::vector<graph::vertex> &clq) const {
     std::set<graph::vertex> clique(clq.begin(), clq.end());
-    std::set<std::set<graph::vertex>> edges;
     std::ofstream file((args::stdin ? "out" : args::filename) + ".dot");
+    std::set<std::set<graph::vertex>> edges;
+    std::mutex edges_mtx, file_mtx, clique_mtx;
+    std::vector<std::future<void>> neighs_callbacks;
+    neighs_callbacks.reserve(V.size());
+
     file << "digraph {\n"
             "ratio=fill; overlap=false;\n"
             "node [width=0.1 height=0.1 fontsize=8 shape=plain];\n"
             "edge [color=orange penwidth=0.1];\n";
     for (const auto &tmp : V) {
-      graph::neighbours_set neighs = tmp.second;
-      graph::vertex v = tmp.first;
-      file << v << " [label=" << v << " ";
-      if (clique.count(v) > 0) {
-        file << "shape=circle";
-      }
-      file << "];\n";
-      for (const auto &u : neighs) {
-        if (edges.count({u, v}) > 0) {
-          continue;
-        }
-        edges.emplace(std::set<graph::vertex>{u, v});
-        file << v << " -> " << u << "[arrowhead=none ";
-        if (clique.count(u) > 0 && clique.count(v) > 0) {
-          file << " color=black penwidth=0.7";
+      {
+        std::unique_lock lock(file_mtx);
+        file << tmp.first << " [label=" << tmp.first << " ";
+        if (std::unique_lock lock(clique_mtx); clique.count(tmp.first) > 0) {
+          file << "shape=circle";
         }
         file << "];\n";
       }
+      neighs_callbacks.emplace_back(std::async(
+          std::launch::deferred,
+          [&](graph::vertex v, const graph::neighbours_set &neighs) {
+            std::ostringstream oss;
+            for (const auto &u : neighs) {
+              if (std::unique_lock lock(edges_mtx); edges.count({u, v}) > 0) {
+                continue;
+              } else {
+                edges.emplace(std::set<graph::vertex>{u, v});
+              }
+              oss << v << " -> " << u << " [arrowhead=none ";
+              if (std::unique_lock lock(clique_mtx);
+                  clique.count(u) > 0 && clique.count(v) > 0) {
+                oss << " color=black penwidth=0.7";
+              }
+              oss << "];\n";
+            }
+            std::unique_lock lock(file_mtx);
+            file << oss.str();
+          },
+          tmp.first, tmp.second));
     }
+    std::for_each(neighs_callbacks.begin(), neighs_callbacks.end(),
+                  [](auto &fn) { fn.get(); });
     file << "}\n";
     file.close();
   }
@@ -723,7 +725,6 @@ public:
 
   explicit multithreaded(graph G) : E(std::move(G)) {
     log::info("Number of available Threads", thread::num_threads);
-    LONG_DELAY();
   }
 
   std::vector<graph::vertex>
