@@ -1,10 +1,11 @@
-LOG			?= 0
-RELEASE			?= 0
+LOG					?= 0
+RELEASE				?= 0
 
 THREADS_PER_CORE 	?= 8
 
-CXX			?= g++
-CXXFLAGS		?= -std=c++17 -Wformat=2 -pedantic -Wundef -Wall -Wextra -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
+CXX					?= g++
+CXXFLAGS			?= -std=c++17 -Iinclude -Wformat=2 -pedantic -Wundef -Wall -Wextra \
+                       -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
 
 ifeq ($(RELEASE),1)
 	CXXFLAGS += -DNDEBUG -O3
@@ -18,8 +19,11 @@ endif
 
 CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
-SOURCE = mc.cpp
-HEADER = mc.hpp
+SOURCE = src/mc.cpp src/graph.cpp src/main.cpp src/mc.cpp \
+         src/enumerator.cpp src/flavour.cpp
+HEADER = include/mc.hpp include/enumerator.hpp include/flavour.hpp \
+         include/graph.hpp include/input.hpp include/log.hpp       \
+		 include/thread.hpp
 
 OBJECT = $(patsubst %.cpp,%.o,$(SOURCE))
 

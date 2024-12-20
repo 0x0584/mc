@@ -20,149 +20,9 @@
 #include "mc.hpp"
 
 namespace mc {
-enumerator::enumerator(graph G) {
-  const std::size_t vertex_count = G.adjacency().size();
-
-  auto begin = std::chrono::high_resolution_clock::now();
-
-  // compute the neighbourhood degrees of all vertices for which they shall be
-  // sorted based on their degeneracy
-  const std::size_t neighs_degree_type_size =
-      sizeof(std::unordered_map<graph::vertex, std::size_t>::node_type);
-  const std::size_t neighs_degree_buffer_size =
-      neighs_degree_type_size * vertex_count;
-  auto neighs_degree_buffer =
-      std::make_unique<std::byte[]>(neighs_degree_buffer_size);
-  std::pmr::monotonic_buffer_resource neighs_degree_pool(
-      neighs_degree_buffer.get(), neighs_degree_buffer_size);
-  std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree(
-      &neighs_degree_pool);
-  std::for_each(
-      std::execution::par_unseq, G.A.cbegin(), G.A.cend(),
-      [&neighs_degree, &G](const graph::adjacency_map::value_type &e) {
-        neighs_degree[e.first] =
-            std::accumulate(e.second.cbegin(), e.second.cend(), 0ul,
-                            [&G](std::size_t total_degrees, graph::vertex u) {
-                              return G.neighbours(u).size() + total_degrees;
-                            });
-      });
-
-  // switch the vertex container from std::unordered_map to std::vector
-  V.resize(vertex_count);
-  std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), V.begin(),
-                 [](graph::adjacency_map::value_type &e) {
-                   return std::make_pair(e.first, std::move(e.second));
-                 });
-
-  // sort vertices based on the degree of their adjacency as it was proven
-  // that it makes colouring vertices optimal (as close to brute-forced)
-  std::sort(std::execution::par_unseq, V.begin(), V.end(),
-            [&](const adjacency_vector::value_type &v,
-                const adjacency_vector::value_type &u) {
-              return (u.second.size() < v.second.size() ||
-                      (u.second.size() == v.second.size() &&
-                       neighs_degree.at(u.first) < neighs_degree.at(v.first)));
-            });
-
-  // allocate containers and reverse mapping between vertices and keys to
-  // enumerate neighbours based on the order of vertices
-
-  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.get(),
-                                                   neighs_degree_buffer_size);
-  std::pmr::unordered_map<graph::vertex, key> mapping(&mapping_pool);
-
-  B.resize(vertex_count);
-  std::for_each(
-      std::execution::par_unseq, B.begin(), B.end(),
-      [vertex_count](std::vector<bool> &mtx) { mtx.resize(vertex_count); });
-  A.resize(vertex_count);
-  for (key v = 0; v < vertex_count; ++v) {
-    const adjacency_vector::value_type &v_pair =
-        V[v]; // a pair of vertex its neighbours
-    mapping.emplace(v_pair.first, v);
-    A[v].resize(v_pair.second.size());
-  }
-
-  // fill vertex adjacency and sort neighbours based on the induced order
-  for (key v = 0; v < vertex_count; ++v) {
-    const graph::neighbours_set &neighs = V[v].second;
-    std::vector<bool> &v_mtx = B[v];
-    // induce the indices of neighbours based on the mapping order
-    std::transform(std::execution::par_unseq, neighs.begin(), neighs.end(),
-                   A[v].begin(), [&v_mtx, &mapping](graph::vertex u) {
-                     key u_key = mapping.at(u);
-                     v_mtx[u_key] = true;
-                     return u_key;
-                   });
-    // then sort them too based on their induced indices for optimal colouring
-    std::sort(std::execution::par_unseq, A[v].begin(), A[v].end());
-  }
-
-  auto end = std::chrono::high_resolution_clock::now();
-  log::info("Vertices were enumerated in",
-            log::time_diff(begin, end, log::bold));
-}
-
-std::vector<enumerator::colour>
-enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
-  assert(not neighs.empty());
-
-  // dividing vertices into colour classes based on their order of adjacency
-  // appearance, then rearrange them based on colour priority
-  //
-  std::vector<std::vector<key>> col_class(neighs.size());
-  //
-  // since at most there will be memory allocations as many vertices, it is fine
-  // to not reserve memory beforehand (as far as I had tested!)
-  for (key v : neighs) {
-    const std::vector<bool> &v_mtx = B.at(v);
-    colour col = 0;
-    //
-    // since also, colour sorting is used to prune unnecessary branching when
-    // seeking exactitude, thus it will practically decrease performance if
-    // checking adjacent colours ran in parallel (again, as far as I had tested)
-    //
-    // although, since using an adjacency matrix is optimal for probing, this
-    // would be far less overhead expense that justifies the memory footprint
-    while (std::any_of(col_class[col].begin(), col_class[col].end(),
-                       [&v_mtx](key u) { return v_mtx.at(u); })) {
-      col++;
-    }
-    col_class[col].emplace_back(v);
-  }
-
-  // sort the vertices in-place (overriding the incoming std::vector)
-  std::vector<colour> colours;
-  colours.reserve(neighs.size());
-  neighs.clear(); // clearing up for in-place sorting (after reserving memory)
-  for (colour col = 0; col < col_class.size(); ++col) {
-    std::fill_n(std::back_inserter(colours), col_class[col].size(), col + 1);
-    // moving/appending the vertices is cheaper than std::copy_n
-    std::move(col_class[col].begin(), col_class[col].end(),
-              std::back_inserter(neighs));
-  }
-
-  return colours;
-}
-
-bool enumerator::is_clique(const std::vector<key> &clique) const {
-  for (key v : clique) {
-    for (key u : clique) {
-      if (v != u) {
-        if (const std::vector<key> &neighs = A.at(u);
-            std::find(std::execution::par_unseq, neighs.cbegin(), neighs.cend(),
-                      v) == neighs.cend()) {
-          return false;
-        }
-      }
-    }
-  }
-  return true;
-}
-
 std::vector<graph::vertex> multithreaded::solve(flavour algo,
-                                                mc::size_t lower_bound,
-                                                mc::size_t upper_bound) {
+                                                std::size_t lower_bound,
+                                                std::size_t upper_bound) {
   if (assert(lower_bound <= upper_bound); upper_bound > 1) {
     // TODO: clean up global variables
     overall_size = lower_bound > 0 ? lower_bound - 1 : 0;
@@ -202,7 +62,7 @@ std::vector<graph::vertex> multithreaded::solve(flavour algo,
   return clique;
 }
 
-void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
+void multithreaded::solution(flavour algo, std::size_t upper_bound) {
   auto begin = std::chrono::high_resolution_clock::now();
 
   if (algo == flavour::hybrid) {
@@ -218,7 +78,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
     // FIXME: prune all vertices with core number less than overall_size
   }
 
-  mc::size_t old_max_clique_size = overall_size;
+  std::size_t old_max_clique_size = overall_size;
 
   // the awaiting pool of threads has shared access to the availability vector,
   // so that if multiple threads finished simultaneously they may flag
@@ -297,7 +157,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
       break; // search has terminated
     }
 
-    mc::size_t current_max_clique_size;
+    std::size_t current_max_clique_size;
     {
       std::shared_lock clique_lock(mtx);
       current_max_clique_size = overall_size; // stamp-sync the size
@@ -339,7 +199,7 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
       reading = true;
       threads[thread_id] = std::thread(
           [&, this](std::uint32_t thread_id, enumerator::key v,
-                    mc::size_t max_clique_size) {
+                    std::size_t max_clique_size) {
             // since the thread can return on several conditions, it is
             // practical to use a scope destructor to ensure that threads are
             // marked as available not matter the branch
@@ -452,8 +312,8 @@ void multithreaded::solution(flavour algo, mc::size_t upper_bound) {
 }
 
 bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
-                                        mc::size_t &max_clique_size,
-                                        mc::size_t depth) {
+                                        std::size_t &max_clique_size,
+                                        std::size_t depth) {
   bool found = false;
   {
     std::shared_lock clique_shared(mtx);
@@ -463,7 +323,7 @@ bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
         // ensure sequential (despite it being out of order) execution
         std::scoped_lock clique_lock(mtx);
         // only after that we save the old value for further comparison
-        const mc::size_t old_overall_size = overall_size;
+        const std::size_t old_overall_size = overall_size;
         // ensuring that we take the correct (intended) maximum value of both
         // so if indeed we found a great size, then we set this thread as the
         // holder of the current maximum clique
@@ -489,9 +349,9 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
                                  std::vector<enumerator::key> &neighs,
                                  std::vector<enumerator::colour> &colours,
                                  std::vector<enumerator::key> &clique,
-                                 mc::size_t &max_clique_size,
-                                 mc::size_t upper_bound, std::size_t &num_nodes,
-                                 mc::size_t depth) {
+                                 std::size_t &max_clique_size,
+                                 std::size_t upper_bound,
+                                 std::size_t &num_nodes, std::size_t depth) {
   num_nodes++;
 
   {
@@ -501,7 +361,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
     max_clique_size = overall_size;
   }
 
-  const mc::size_t next_depth = depth + 1;
+  const std::size_t next_depth = depth + 1;
   while (not neighs.empty() && not upper_bound_reached &&
          // since the vertices were coloured "optimally", we can use them to
          // terminate a branch early when we deduce it will not lead into max
@@ -513,7 +373,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
          // clique we are traversing.  thus we can terminate a branch as soon as
          // we are less than the global size
          depth + colours.back() > max_clique_size) {
-    const mc::size_t prev_max_clique_size = max_clique_size;
+    const std::size_t prev_max_clique_size = max_clique_size;
 
     // vertices we sorted in increasing degeneracy so taking the highest colour
     enumerator::key u = neighs.back();
@@ -558,9 +418,10 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
 void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
                                      std::vector<enumerator::key> &neighs,
                                      std::vector<enumerator::key> &clique,
-                                     mc::size_t &max_clique_size,
+                                     std::size_t &max_clique_size,
                                      ::size_t upper_bound,
-                                     std::size_t &num_nodes, mc::size_t depth) {
+                                     std::size_t &num_nodes,
+                                     std::size_t depth) {
   if (upper_bound_reached) {
     return;
   }
@@ -572,8 +433,8 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
     max_clique_size = overall_size;
   }
 
-  const mc::size_t prev_max_clique_size = max_clique_size;
-  const mc::size_t next_depth = depth + 1;
+  const std::size_t prev_max_clique_size = max_clique_size;
+  const std::size_t next_depth = depth + 1;
 
   // the essence of the heuristic is instead of traversing all neighbours, we
   // only pick the most promising one: the vertex with the highest colour
@@ -603,54 +464,4 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
     clique.emplace_back(v);
   }
 }
-
-void print_clique(const std::vector<graph::vertex> &clique) {
-  const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
-  std::ostringstream oss;
-  oss << "Max Clique has " << m.size() << " vertices { ";
-  for (graph::vertex e : m) {
-    oss << e << " ";
-  }
-  oss << "}";
-  log::info(oss.str());
-}
 } // namespace mc
-
-int main(int argc, char *argv[]) {
-  using namespace mc;
-
-  log::setup_logger();
-  args::parse(argc, argv);
-
-  try {
-    input in;
-
-    const std::size_t vertices_buffer_size =
-        in.num_v * sizeof(graph::adjacency_map::node_type);
-    auto vertices_buffer = std::make_unique<std::byte[]>(vertices_buffer_size);
-    std::pmr::monotonic_buffer_resource vertices_pool(vertices_buffer.get(),
-                                                      vertices_buffer_size);
-    const std::size_t edges_buffer_size =
-        in.num_e * sizeof(graph::neighbours_set::node_type);
-    auto edges_buffer = std::make_unique<std::byte[]>(edges_buffer_size);
-    std::pmr::monotonic_buffer_resource edges_pool(edges_buffer.get(),
-                                                   edges_buffer_size);
-    graph_builder builder(in, vertices_pool, edges_pool);
-    graph G = builder.build();
-
-    multithreaded algo(std::move(G));
-    for (long turn = 1; turn <= args::num_turns; ++turn) {
-      log::info("Turn", turn, "/", args::num_turns);
-      const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
-      print_clique(clique);
-      if (args::draw) {
-        algo.draw(clique);
-      }
-    }
-  } catch (const std::exception &e) {
-    log::info(e.what());
-    return EXIT_FAILURE;
-  }
-
-  return EXIT_SUCCESS;
-}
