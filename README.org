@@ -7,3 +7,7 @@
   - compile using =make RELEASE=1 DEBUG=0 THREADS=8 clean mc=
   - to visualise the graph and the clique use =sfdp out.dot -odata.png -Tpng=
   - run program and use =-h= to see the arguments
+
+* Contribution
+
+ - merged [[https://github.com/UnickSoft/GraphOffline/pull/9][PR]] in a graph visualisation webapp 
