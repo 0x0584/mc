@@ -25,6 +25,7 @@
 #include <execution>
 #include <functional>
 #include <future>
+#include <condition_variable>
 #include <memory_resource>
 #include <mutex>
 #include <shared_mutex>

@@ -18,6 +18,7 @@
 // USA.
 
 #include "enumerator.hpp"
+#include <numeric>
 
 namespace mc {
 void enumerator::print() const {

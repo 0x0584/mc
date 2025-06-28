@@ -11,3 +11,5 @@ TAGS
 *.dot
 *.o
 mc
+/.DS_Store
+/graphs/

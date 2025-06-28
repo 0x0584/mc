@@ -102,7 +102,7 @@ struct args {
   static inline std::istream &stream() { return stdin ? std::cin : file; }
 
   static inline std::ifstream file;
-  static inline long num_turns = 100;
+  static inline long num_turns = 5;
   static inline bool expect_size, undirected = true, stdin = true;
   static inline std::size_t size = -1u, upper_bound = -1u, lower_bound = 1;
   static inline std::string filename;
