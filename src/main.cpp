@@ -42,16 +42,8 @@ int main(int argc, char *argv[]) {
   try {
     input in;
 
-    const std::size_t vertices_buffer_size =
-        in.num_v * sizeof(graph::adjacency_map::node_type);
-    auto vertices_buffer = std::make_unique<std::byte[]>(vertices_buffer_size);
-    std::pmr::monotonic_buffer_resource vertices_pool(vertices_buffer.get(),
-                                                      vertices_buffer_size);
-    const std::size_t edges_buffer_size =
-        in.num_e * sizeof(graph::neighbours_set::node_type);
-    auto edges_buffer = std::make_unique<std::byte[]>(edges_buffer_size);
-    std::pmr::monotonic_buffer_resource edges_pool(edges_buffer.get(),
-                                                   edges_buffer_size);
+    std::pmr::monotonic_buffer_resource vertices_pool;
+    std::pmr::monotonic_buffer_resource edges_pool;
     graph_builder builder(in, vertices_pool, edges_pool);
     graph G = builder.build();
 

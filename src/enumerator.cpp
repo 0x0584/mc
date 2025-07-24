@@ -34,6 +34,7 @@ void enumerator::print() const {
   oss << "\n";
   log::print(oss.str());
 }
+
 void enumerator::draw(const std::vector<graph::vertex> &clq) const {
   std::set<graph::vertex> clique(clq.begin(), clq.end());
   std::ofstream file((args::stdin ? "out" : args::filename) + ".dot");
@@ -90,16 +91,10 @@ enumerator::enumerator(graph G) {
 
   // compute the neighbourhood degrees of all vertices for which they shall be
   // sorted based on their degeneracy
-  const std::size_t neighs_degree_type_size =
-      sizeof(std::unordered_map<graph::vertex, std::size_t>::node_type);
-  const std::size_t neighs_degree_buffer_size =
-      neighs_degree_type_size * vertex_count;
-  auto neighs_degree_buffer =
-      std::make_unique<std::byte[]>(neighs_degree_buffer_size);
-  std::pmr::monotonic_buffer_resource neighs_degree_pool(
-      neighs_degree_buffer.get(), neighs_degree_buffer_size);
+  std::pmr::monotonic_buffer_resource memory_pool;
   std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree(
-      &neighs_degree_pool);
+      &memory_pool);
+  neighs_degree.reserve(vertex_count);
   std::for_each(
       std::execution::par_unseq, G.A.cbegin(), G.A.cend(),
       [&neighs_degree, &G](const graph::adjacency_map::value_type &e) {
@@ -130,9 +125,8 @@ enumerator::enumerator(graph G) {
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
 
-  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.get(),
-                                                   neighs_degree_buffer_size);
-  std::pmr::unordered_map<graph::vertex, key> mapping(&mapping_pool);
+  std::pmr::unordered_map<graph::vertex, key> mapping(&memory_pool);
+  mapping.reserve(vertex_count);
 
   B.resize(vertex_count);
   std::for_each(

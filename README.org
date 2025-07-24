@@ -15,3 +15,12 @@
 ** distributed version
 
 * Implementation
+
+* TODOs
+SCHEDULED: <2025-10-01 Wed>
+
++ [ ] introduce caching neighbourhood
++ [ ] make colouring concurrent
++ [ ] make enumeration concurrent
++ [ ] benchmark before and after
+  

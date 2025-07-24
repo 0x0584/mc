@@ -69,7 +69,7 @@ struct args {
         exec_mode = flavour::hybrid;
         break;
       case 'o':
-        draw = true;
+        draw = false;
         break;
       case 'h':
       case ':':

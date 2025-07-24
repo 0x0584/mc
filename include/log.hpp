@@ -1,4 +1,4 @@
-// loh.hpp
+// log.hpp
 //
 // Copyright (C) 2024  0x0584 (Anas)
 //
@@ -30,6 +30,7 @@
 #include <iostream>
 #include <mutex>
 #include <ostream>
+#include <sstream>
 #include <string>
 
 namespace mc {

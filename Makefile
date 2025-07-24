@@ -1,69 +1,56 @@
+PROGRAM = max-clique
+
 LOG ?= 0
 RELEASE ?= 1
-
 THREADS_PER_CORE ?= 8
 
-MACPORTS_PATH = /opt/local/bin/
+SOURCES = src/graph.cpp src/enumerator.cpp src/flavour.cpp \
+ src/mc.cpp src/main.cpp
 
-CXX = /opt/local/bin/clang++-mp-19
-LLD = ld64.lld-mp-19
+HEADERS = include/enumerator.hpp include/flavour.hpp include/graph.hpp \
+ include/mc.hpp include/input.hpp include/log.hpp include/thread.hpp
 
-LIBCPP_PATH = /opt/local/libexec/llvm-19/lib/libc++/
-LIBLLVM_PATH = /opt/local/libexec/llvm-19/lib/
-LIBUNWIND_PATH = /opt/local/libexec/llvm-19/lib/libunwind
+OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
-LIBCPP_FLAGS = -L $(LIBCPP_PATH) -Wl,-rpath,$(LIBCPP_PATH) \
- -L $(LIBLLVM_PATH) -Wl,-rpath,$(LIBLLVM_PATH) \
- -L $(LIBUNWIND_PATH) -Wl,-rpath,$(LIBUNWIND_PATH) \
- -lc++experimental -lc++
+CXX ?= g++
 
-TBB_FLAGS = -L /opt/local/libexec/tbb/lib -ltbb
-
-LDFLAGS = $(LIBCPP_FLAGS) #$(TBB_FLAGS) 
-
-CXXFLAGS = -pthread -fexperimental-library -std=c++17 -Iinclude -Wformat=2 -pedantic -Wundef -Wall -Wextra \
+CXXFLAGS = -std=c++17 -Iinclude -Wformat=2 -pedantic -Wundef -Wall -Wextra \
  -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
+
+CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
 ifeq ($(RELEASE),1)
  CXXFLAGS += -DNDEBUG -O3
 else
- CXXFLAGS += -DDEBUG -g3
+ CXXFLAGS += -DDEBUG -g3 -O2
 endif
 
 ifeq ($(LOG),1)
  CXXFLAGS += -DLOG
 endif
 
-CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
+TDDFLAGS = -ltbb -L/opt/local/libexec/tbb/lib
+PROFFLAGS = -lprofiler -L/opt/local/lib
 
-#LDFLAGS ?= -ltdd -pthread
-SOURCE = src/mc.cpp src/graph.cpp src/main.cpp src/mc.cpp \
- src/enumerator.cpp src/flavour.cpp
-HEADER = include/mc.hpp include/enumerator.hpp include/flavour.hpp \
- include/graph.hpp include/input.hpp include/log.hpp       \
- include/thread.hpp
+LDFLAGS ?= $(TDDFLAGS) $(PROFFLAGS)
 
-OBJECT = $(patsubst %.cpp,%.o,$(SOURCE))
-
-PROGRAM = max-clique
-
-$(PROGRAM): $(OBJECT)
+$(PROGRAM): $(OBJECTS) $(HEADERS)
 	@echo CXX $@
-	@$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+	@$(CXX) -o $@ $(CXXFLAGS) $(OBJECTS) $(LDFLAGS)
 
-%.o: %.cpp $(HEADER)
+%.o: %.cpp $(HEADERS)
 	@echo CXX $@
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 info:
 	@echo "LOG=$(LOG)"
-	@echo "DEBUG=$(DEBUG)"
 	@echo "RELEASE=$(RELEASE)"
 	@echo "THREADS_PER_CORE=$(THREADS_PER_CORE)"
 	@echo "CXX=$(CXX)"
 	@echo "CXXFLAGS=$(CXXFLAGS)"
+	@echo "LDFLAGS=$(LDFLAGS)"
 
 clean:
-	@rm -f $(PROGRAM) $(OBJECT)
+	@rm -f $(PROGRAM) $(OBJECTS)
 
 re: clean $(PROGRAM)
