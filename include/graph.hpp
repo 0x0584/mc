@@ -45,24 +45,33 @@ struct graph {
   friend struct enumerator;
   friend struct graph_builder;
 
-  graph(const graph &) = delete;
-  graph(graph &&) = default;
-  explicit graph(std::pmr::monotonic_buffer_resource &vertices_pool)
-      : A(&vertices_pool) {}
+  explicit graph(std::pmr::monotonic_buffer_resource &vertices_pool,
+                 std::pmr::monotonic_buffer_resource &edges_pool)
+      : vertices_pool(vertices_pool), edges_pool(edges_pool),
+        A(&vertices_pool) {}
   ~graph() { log::info("~graph()"); }
 
+  graph(const graph &) = delete;
+  graph(graph &&) = default;
+
   graph &operator=(graph &) = delete;
-  graph &operator=(graph &&G) = default;
+  graph &operator=(graph &&) = delete;
 
   inline const neighbours_set &neighbours(vertex v) const { return A.at(v); }
   inline const adjacency_map &adjacency() const { return A; }
   inline bool directed() { return not undirected; }
 
+  bool add_edge_undirected(vertex u, vertex v);
+  
   void print() const;
 
 private:
   bool undirected = false;
   std::size_t edge_count = 0;
+
+  std::pmr::monotonic_buffer_resource &vertices_pool;
+  std::pmr::monotonic_buffer_resource &edges_pool;
+
   adjacency_map A;
 };
 
@@ -70,30 +79,23 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(input &in,
-                         std::pmr::monotonic_buffer_resource &vertices_pool,
-                         std::pmr::monotonic_buffer_resource &edges_pool,
-                         bool undirected = args::undirected)
-      : feed(in), G(vertices_pool), edges_pool(edges_pool) {
-    G.undirected = undirected;
+  explicit graph_builder(input &in) : feed(in) {
     Q.reserve(feed.estimate_chunks());
   }
   ~graph_builder() { log::info("~graph_builder()"); }
-  
+
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;
 
   bool read_single_vertex(graph::vertex &w, std::string::iterator &it,
                           std::string::iterator end);
 
-  graph build();
+  graph build(std::pmr::monotonic_buffer_resource &vertices_pool,
+              std::pmr::monotonic_buffer_resource &edges_pool);
 
 private:
-  std::mutex graph_mtx;
   std::vector<std::future<void>> Q;
   mc::feed feed;
-  graph G;
-  std::pmr::monotonic_buffer_resource &edges_pool;
 };
 } // namespace mc
 #endif // GRAPH_HPP

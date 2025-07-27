@@ -43,13 +43,11 @@ int main(int argc, char *argv[]) {
 
   try {
     input in;
-
+    graph_builder builder(in);
+	
     std::pmr::monotonic_buffer_resource vertices_pool;
-    std::pmr::monotonic_buffer_resource edges_pool;
-    graph_builder builder(in, vertices_pool, edges_pool);
-    graph G = builder.build();
-
-    multithreaded algo(std::move(G));
+    std::pmr::monotonic_buffer_resource edges_pool;	
+    multithreaded algo(builder.build(vertices_pool, edges_pool));
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       if (args::num_turns != 1)
         log::info("Turn", turn, "/", args::num_turns);

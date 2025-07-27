@@ -99,7 +99,7 @@ private:
 public:
   static inline std::size_t no_upper_bound = -1u;
 
-  explicit multithreaded(graph G) : E(std::move(G)) {
+  explicit multithreaded(graph G) : E(G) {
     log::info("Number of available Threads", thread::num_threads);
   }
 

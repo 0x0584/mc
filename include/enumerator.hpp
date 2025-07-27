@@ -83,7 +83,7 @@ struct enumerator {
     std::pair<std::vector<key>, std::vector<colour>> keys_colours;
   };
 
-  explicit enumerator(graph G);
+  explicit enumerator(graph &G);
 
   inline graph::vertex key_to_vertex(std::size_t index) const {
     assert(index < vertex_count());

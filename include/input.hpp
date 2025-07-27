@@ -227,7 +227,7 @@ private:
     return {read, in->gcount()};
   }
 
-  input in;
+  input &in;
   buffer remaining{};
   buffer::iterator tail_remaining;
 };

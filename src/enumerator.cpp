@@ -87,7 +87,7 @@ void enumerator::draw(const std::vector<graph::vertex> &clq) const {
   file.close();
 }
 
-enumerator::enumerator(graph G) : cache(1'000'000) {
+enumerator::enumerator(graph &G) : cache(1'000'000) {
   const std::size_t vertex_count = G.adjacency().size();
 
   auto begin = std::chrono::high_resolution_clock::now();
@@ -171,7 +171,7 @@ inline void enumerator::cache_hit_progress() const {
   }
 }
 
-// TODO refactor the colouring part
+// XXX refactor the colouring part
 enumerator::sorted_keys
 enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
   assert(not vertices.empty());
@@ -236,8 +236,8 @@ enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
               std::back_inserter(vertices));
   }
 
-  // FIXME greedy colouring sorting reorders the neighbours
-  // FIXME neighbours reference is lost when moved from
+  // XXX greedy colouring sorting reorders the neighbours
+  // XXX neighbours reference is lost when moved from
   return sorted_keys(cache.set(vertices, colours));
 }
 

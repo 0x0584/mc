@@ -31,8 +31,31 @@ void graph::print() const {
     }
     oss << "}\n";
   }
-  oss << "\n";
   log::print(oss.str());
+}
+
+bool graph::add_edge_undirected(vertex u, vertex v) {
+  neighbours_set &u_neighs = A[u];
+  if (u_neighs.empty()) {
+    u_neighs = neighbours_set{&edges_pool};
+  }
+  if (u_neighs.emplace(v).second) {
+    ++edge_count;
+    if (undirected) {
+      neighbours_set &v_neighs = A[v];
+      if (v_neighs.empty()) {
+        v_neighs = neighbours_set{&edges_pool};
+      }
+      if (not v_neighs.emplace(u).second) {
+        log::info("redundant edge from", v, "to", u);
+        return false;
+      }
+    }
+  } else {
+    log::info("redundant edge from", u, "to", v);
+    return false;
+  }
+  return true;
 }
 
 bool graph_builder::read_single_vertex(graph::vertex &w,
@@ -60,14 +83,17 @@ bool graph_builder::read_single_vertex(graph::vertex &w,
   }
 }
 
-graph graph_builder::build() {
+graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
+                           std::pmr::monotonic_buffer_resource &edges_pool) {
   auto begin = std::chrono::high_resolution_clock::now();
-
+  std::mutex graph_mtx;
+  graph G(vertices_pool, edges_pool);
+  G.undirected = args::undirected;
   do {
     std::string buffer = feed.read_chunk();
     Q.emplace_back(std::async(
         std::launch::deferred,
-        [this](std::string buffer) {
+        [&, this](std::string buffer) {
           std::string::iterator it = buffer.begin();
           int vertices_read = 2;
           for (graph::vertex u, v; vertices_read == 2;) {
@@ -81,24 +107,7 @@ graph graph_builder::build() {
             }
 
             std::unique_lock lock(graph_mtx);
-            graph::neighbours_set &u_neighs = G.A[u];
-            if (u_neighs.empty()) {
-              u_neighs = graph::neighbours_set{&edges_pool};
-            }
-            if (u_neighs.emplace(v).second) {
-              ++G.edge_count;
-              if (G.undirected) {
-                graph::neighbours_set &v_neighs = G.A[v];
-                if (v_neighs.empty()) {
-                  v_neighs = graph::neighbours_set{&edges_pool};
-                }
-                if (not v_neighs.emplace(u).second) {
-                  log::info("redundant edge from", u, "to", v);
-                }
-              }
-            } else {
-              log::info("redundant edge from", u, "to", v);
-            }
+            G.add_edge_undirected(u, v);
           }
         },
         std::move(buffer)));
@@ -113,7 +122,7 @@ graph graph_builder::build() {
   assert(G.A.size() == feed.num_vertices());
   assert(G.edge_count == feed.num_edges());
 
-  return std::move(G);
+  return G;
 }
 
 } // namespace mc

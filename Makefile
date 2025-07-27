@@ -12,26 +12,19 @@ HEADERS = include/enumerator.hpp include/flavour.hpp include/graph.hpp \
 
 OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
-CXX ?= g++
+CXX = g++
 
-CXXFLAGS = -std=c++23 -Wformat=2 -Wpedantic -Wundef -Wall -Wextra -Iinclude
+CXXFLAGS = -std=c++23 -Iinclude
+CXXFLAGS += -Wformat=2 -Wall -Wextra -Wpedantic -Wundef -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
 CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
-TDDFLAGS = -ltbb #-L/opt/local/libexec/tbb/lib
-PROFFLAGS = -lprofiler #-L/opt/local/lib
-
-LDFLAGS ?= $(TDDFLAGS)
+LDFLAGS = -ltbb
 
 ifeq ($(RELEASE),1)
- CXXFLAGS += -DNDEBUG -O3 -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
+ CXXFLAGS += -DNDEBUG -O3
 else
  CXXFLAGS += -DDEBUG -g3 -O2 -fno-omit-frame-pointer
- LDFLAGS += $(PROFFLAGS)
-endif
-
-
-ifeq ($(USE_CACHE),1)
- CXXFLAGS += -DUSE_CACHE
+ LDFLAGS += -lprofiler
 endif
 
 ifeq ($(LOG),1)
