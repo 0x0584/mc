@@ -30,7 +30,7 @@
 #include "log.hpp"
 
 namespace thread {
-const std::uint32_t threads_per_core = THREADS_PER_CORE;
+  const std::uint32_t threads_per_core = THREADS_PER_CORE;
 const std::uint32_t num_threads =
     std::thread::hardware_concurrency() * threads_per_core;
 

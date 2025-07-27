@@ -17,6 +17,8 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
+#include <gperftools/profiler.h>
+
 #include "graph.hpp"
 #include "mc.hpp"
 
@@ -49,7 +51,8 @@ int main(int argc, char *argv[]) {
 
     multithreaded algo(std::move(G));
     for (long turn = 1; turn <= args::num_turns; ++turn) {
-      log::info("Turn", turn, "/", args::num_turns);
+      if (args::num_turns != 1)
+        log::info("Turn", turn, "/", args::num_turns);
       const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
       print_clique(clique);
       if (args::draw) {

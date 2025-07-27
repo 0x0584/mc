@@ -17,6 +17,8 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
+#include <gperftools/profiler.h>
+
 #include "mc.hpp"
 
 namespace mc {
@@ -96,8 +98,11 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
-  std::vector<enumerator::key> W(E.vertex_count());
-  std::iota(W.begin(), W.end(), 0);
+  std::vector<enumerator::key> keys(E.vertex_count());
+  std::iota(keys.begin(), keys.end(), 0);
+  // sort vertices based on their colours using greedy colouring
+  // FIXME: re-introduce this inside the loop
+  auto sorted_keys = E.greedy_colour_sort(std::move(keys));
   //
   // once a vertex is selected, it is pruned after inducing its neighbours
   const std::size_t pruned_buffer_size =
@@ -126,11 +131,14 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
   //
   // since the algorithm is recursive, each callback is a branching
   std::atomic_size_t total_branches = 0;
+  E.reset_cache_hits();
 
+  ProfilerStart("max-clique.prof");
   auto percent_begin = std::chrono::high_resolution_clock::now();
-  while (not W.empty() && not abort_search && not upper_bound_reached) {
+  while (not sorted_keys.empty() && not abort_search &&
+         not upper_bound_reached) {
     auto percent_end = std::chrono::high_resolution_clock::now();
-    const std::size_t percent = E.vertex_count() - W.size();
+    const std::size_t percent = E.vertex_count() - sorted_keys.size();
 
 #ifdef LOG
     log::info("waiting...", log::progress(percent, E.vertex_count()), "in",
@@ -168,11 +176,9 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
       old_max_clique_size = current_max_clique_size;
     }
 
-    // sort vertices based on their colours using greedy colouring
-    std::vector<enumerator::colour> colours = E.greedy_colour_sort(W);
     for (std::uint32_t thread_id = 0;
-         thread_id < threads.size() && not W.empty() && not abort_search &&
-         not upper_bound_reached;
+         thread_id < threads.size() && not sorted_keys.empty() &&
+         not abort_search && not upper_bound_reached;
          ++thread_id) {
 
       if (not available[thread_id]) {
@@ -184,19 +190,18 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
         threads[thread_id].join();
       }
 
-      if (colours.back() <= current_max_clique_size) {
+      if (sorted_keys.highest_colour() <= current_max_clique_size) {
 #ifdef LOG
-        log::print(E.key_to_vertex(W.back()),
+        log::print(E.key_to_vertex(sorted_keys.key_with_highest_colour()),
                    "has insufficient colours. abort search!");
 #endif
         abort_search = true;
         break;
       }
 
-      enumerator::key v = W.back();
-      W.pop_back();
-      colours.pop_back();
+      enumerator::key v = sorted_keys.pop_key_with_highest_colour();
       reading = true;
+      // TODO refactor threading
       threads[thread_id] = std::thread(
           [&, this](std::uint32_t thread_id, enumerator::key v,
                     std::size_t max_clique_size) {
@@ -230,9 +235,8 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
               return;
             }
 
-            std::vector<enumerator::colour> colours =
-                E.greedy_colour_sort(neighs);
-            if (colours.back() < max_clique_size) {
+            auto sorted_neighs = E.greedy_colour_sort(std::move(neighs));
+            if (sorted_neighs.highest_colour() < max_clique_size) {
 #ifdef LOG
               log::print(E.key_to_vertex(v),
                          "has insufficient colours. abort search!");
@@ -243,19 +247,19 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
 #ifdef LOG
             log::print_thread(thread_id, "branching on", E.key_to_vertex(v),
-                              "with", neighs.size(), "neighbours of",
-                              colours.back(), "colours");
+                              "with", sorted_neighs.size(), "neighbours of",
+                              sorted_neighs.highest_colour(), "colours");
             auto begin = std::chrono::high_resolution_clock::now();
 #endif
 
             std::size_t num_nodes = 0;
             std::vector<enumerator::key> clique;
             if (algo == flavour::heuristic) {
-              branch_heuristic(thread_id, v, neighs, clique, max_clique_size,
-                               upper_bound, num_nodes);
+              branch_heuristic(thread_id, v, sorted_neighs, clique,
+                               max_clique_size, upper_bound, num_nodes);
             } else {
-              branch_exact(thread_id, v, neighs, colours, clique,
-                           max_clique_size, upper_bound, num_nodes);
+              branch_exact(thread_id, v, sorted_neighs, clique, max_clique_size,
+                           upper_bound, num_nodes);
             }
 
             if (std::scoped_lock clique_lock(mtx);
@@ -281,7 +285,8 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
             auto end = std::chrono::high_resolution_clock::now();
             log::print_thread(thread_id, "done with", E.key_to_vertex(v),
                               "after", num_nodes, "branches took",
-                              log::time_diff(begin, end, log::bold));
+                              log::time_diff(begin, end, log::bold), "with",
+                              E.get_cache_hits(), "cache hits");
 #endif
           },
           thread_id, v, current_max_clique_size);
@@ -301,13 +306,16 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
     }
   }
   auto end = std::chrono::high_resolution_clock::now();
+  ProfilerStop();
 
 #ifdef LOG
   log::info("all threads have joined");
 #endif
 
   log::info(algo, "finished! found", overall_size, "vertices after",
-            total_branches, "branches in",
+            total_branches, "branches and", E.get_cache_hits(),
+            "cache hits with ratio of",
+            (double(E.get_cache_hits()) / total_branches), "in",
             log::time_diff(begin, end, log::ansi_colours | log::bold));
 }
 
@@ -346,8 +354,7 @@ bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
 }
 
 void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
-                                 std::vector<enumerator::key> &neighs,
-                                 std::vector<enumerator::colour> &colours,
+                                 enumerator::sorted_keys &sorted_neighs,
                                  std::vector<enumerator::key> &clique,
                                  std::size_t &max_clique_size,
                                  std::size_t upper_bound,
@@ -362,7 +369,8 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
   }
 
   const std::size_t next_depth = depth + 1;
-  while (not neighs.empty() && not upper_bound_reached &&
+  //  const std::size_t neighs_before = sorted_neighs.size();
+  while (not sorted_neighs.empty() && not upper_bound_reached &&
          // since the vertices were coloured "optimally", we can use them to
          // terminate a branch early when we deduce it will not lead into max
          // clique.  since the depth represents how many vertices had been
@@ -372,15 +380,14 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
          // colours get closer and closer to accurately indicate the size of the
          // clique we are traversing.  thus we can terminate a branch as soon as
          // we are less than the global size
-         depth + colours.back() > max_clique_size) {
+         depth + sorted_neighs.highest_colour() > max_clique_size) {
     const std::size_t prev_max_clique_size = max_clique_size;
 
     // vertices we sorted in increasing degeneracy so taking the highest colour
-    enumerator::key u = neighs.back();
-    neighs.pop_back();
-    colours.pop_back();
+    enumerator::key u = sorted_neighs.pop_key_with_highest_colour();
 
-    std::vector<enumerator::key> new_neighs = E.neighbourhood(u, neighs);
+    std::vector<enumerator::key> new_neighs =
+        E.neighbourhood(u, sorted_neighs.keys());
     if (new_neighs.empty() || next_depth == upper_bound) {
       if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
         if (next_depth == upper_bound) {
@@ -391,11 +398,10 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
         clique.emplace_back(u);
       }
     } else {
-      std::vector<enumerator::colour> new_colours =
-          E.greedy_colour_sort(new_neighs);
-      if (next_depth + new_colours.back() > max_clique_size) {
-        branch_exact(thread_id, u, new_neighs, new_colours, clique,
-                     max_clique_size, upper_bound, num_nodes, next_depth);
+      auto new_sorted_neighs = E.greedy_colour_sort(std::move(new_neighs));
+      if (next_depth + new_sorted_neighs.highest_colour() > max_clique_size) {
+        branch_exact(thread_id, u, new_sorted_neighs, clique, max_clique_size,
+                     upper_bound, num_nodes, next_depth);
       }
     }
 
@@ -413,10 +419,15 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
       clique.emplace_back(v);
     }
   }
+
+  // log::print_thread(thread_id, "branching off", E.key_to_vertex(v), "with",
+  //                   neighs_before - neighs.size(),
+  //                   "remaining neighbours with max_colour", colours.back(),
+  //                   "colours and depth", depth);
 }
 
 void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
-                                     std::vector<enumerator::key> &neighs,
+                                     enumerator::sorted_keys &sorted_neighs,
                                      std::vector<enumerator::key> &clique,
                                      std::size_t &max_clique_size,
                                      ::size_t upper_bound,
@@ -438,10 +449,10 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
 
   // the essence of the heuristic is instead of traversing all neighbours, we
   // only pick the most promising one: the vertex with the highest colour
-  enumerator::key u = neighs.back();
-  neighs.pop_back();
+  enumerator::key u = sorted_neighs.pop_key_with_highest_colour();
 
-  std::vector<enumerator::key> new_neighs = E.neighbourhood(u, neighs);
+  std::vector<enumerator::key> new_neighs =
+      E.neighbourhood(u, sorted_neighs.keys());
   if (new_neighs.empty() || next_depth == upper_bound) {
     if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
       if (next_depth == upper_bound) {
@@ -452,10 +463,9 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
       clique.emplace_back(u);
     }
   } else {
-    std::vector<enumerator::colour> new_colours =
-        E.greedy_colour_sort(new_neighs);
-    if (next_depth + new_colours.back() > max_clique_size) {
-      branch_heuristic(thread_id, u, new_neighs, clique, max_clique_size,
+    auto new_sorted_neighs = E.greedy_colour_sort(std::move(new_neighs));
+    if (next_depth + new_sorted_neighs.highest_colour() > max_clique_size) {
+      branch_heuristic(thread_id, u, new_sorted_neighs, clique, max_clique_size,
                        upper_bound, num_nodes, next_depth);
     }
   }

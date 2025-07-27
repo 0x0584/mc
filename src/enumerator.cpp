@@ -18,7 +18,10 @@
 // USA.
 
 #include "enumerator.hpp"
+#include "thread.hpp"
+
 #include <numeric>
+#include <shared_mutex>
 
 namespace mc {
 void enumerator::print() const {
@@ -84,7 +87,7 @@ void enumerator::draw(const std::vector<graph::vertex> &clq) const {
   file.close();
 }
 
-enumerator::enumerator(graph G) {
+enumerator::enumerator(graph G) : cache(1'000'000) {
   const std::size_t vertex_count = G.adjacency().size();
 
   auto begin = std::chrono::high_resolution_clock::now();
@@ -160,24 +163,59 @@ enumerator::enumerator(graph G) {
             log::time_diff(begin, end, log::bold));
 }
 
-std::vector<enumerator::colour>
-enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
-  assert(not neighs.empty());
+inline void enumerator::cache_hit_progress() const {
+  static const std::size_t cache_portion = cache.capacity() * .05;
+  std::size_t hits = cache_hits;
+  if (hits >= cache_portion && hits % cache_portion == 0) {
+    log::info(COL_GREEN, "cache total_hits", hits);
+  }
+}
+
+// TODO refactor the colouring part
+enumerator::sorted_keys
+enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
+  assert(not vertices.empty());
+
+  std::vector<colour> colours;
+  std::unique_lock<std::shared_mutex> cache_write_lock(cache_mtx,
+                                                       std::defer_lock);
+  thread::scope_dtor unlock_cache([&cache_write_lock]() {
+    if (cache_write_lock.owns_lock()) {
+      cache_write_lock.unlock();
+    }
+  });
+
+  {
+    std::shared_lock<std::shared_mutex> cache_read_lock(cache_mtx);
+    if (auto precomputed = cache.get(vertices); precomputed.has_value()) {
+      cache_hits++;
+      cache_hit_progress();
+      return sorted_keys(precomputed.value());
+    }
+  }
+
+  cache_write_lock.lock();
+  if (auto precomputed = cache.get(vertices); precomputed.has_value()) {
+    cache_hits++;
+    cache_hit_progress();
+    return sorted_keys(precomputed.value());
+  }
 
   // dividing vertices into colour classes based on their order of adjacency
   // appearance, then rearrange them based on colour priority
   //
-  std::vector<std::vector<key>> col_class(neighs.size());
+  std::vector<std::vector<key>> col_class(vertices.size());
   //
-  // since at most there will be memory allocations as many vertices, it is fine
-  // to not reserve memory beforehand (as far as I had tested!)
-  for (key v : neighs) {
+  // since at most there will be memory allocations as many vertices, it is
+  // fine to not reserve memory beforehand (as far as I had tested!)
+  for (key v : vertices) {
     const std::vector<bool> &v_mtx = B.at(v);
     colour col = 0;
     //
     // since also, colour sorting is used to prune unnecessary branching when
     // seeking exactitude, thus it will practically decrease performance if
-    // checking adjacent colours ran in parallel (again, as far as I had tested)
+    // checking adjacent colours ran in parallel (again, as far as I had
+    // tested)
     //
     // although, since using an adjacency matrix is optimal for probing, this
     // would be far less overhead expense that justifies the memory footprint
@@ -189,17 +227,18 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
   }
 
   // sort the vertices in-place (overriding the incoming std::vector)
-  std::vector<colour> colours;
-  colours.reserve(neighs.size());
-  neighs.clear(); // clearing up for in-place sorting (after reserving memory)
+  colours.reserve(vertices.size());
+  vertices.clear(); // clearing up for in-place sorting (after reserving memory)
   for (colour col = 0; col < col_class.size(); ++col) {
     std::fill_n(std::back_inserter(colours), col_class[col].size(), col + 1);
     // moving/appending the vertices is cheaper than std::copy_n
     std::move(col_class[col].begin(), col_class[col].end(),
-              std::back_inserter(neighs));
+              std::back_inserter(vertices));
   }
 
-  return colours;
+  // FIXME greedy colouring sorting reorders the neighbours
+  // FIXME neighbours reference is lost when moved from
+  return sorted_keys(cache.set(vertices, colours));
 }
 
 bool enumerator::is_clique(const std::vector<key> &clique) const {

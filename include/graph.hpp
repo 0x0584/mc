@@ -22,15 +22,15 @@
 
 #include <cassert>
 
-#include <ostream>
 #include <future>
-#include <vector>
+#include <memory_resource>
+#include <ostream>
 #include <unordered_map>
 #include <unordered_set>
-#include <memory_resource>
+#include <vector>
 
-#include "log.hpp"
 #include "input.hpp"
+#include "log.hpp"
 
 namespace mc {
 struct graph {
@@ -49,6 +49,8 @@ struct graph {
   graph(graph &&) = default;
   explicit graph(std::pmr::monotonic_buffer_resource &vertices_pool)
       : A(&vertices_pool) {}
+  ~graph() { log::info("~graph()"); }
+
   graph &operator=(graph &) = delete;
   graph &operator=(graph &&G) = default;
 
@@ -76,7 +78,8 @@ struct graph_builder {
     G.undirected = undirected;
     Q.reserve(feed.estimate_chunks());
   }
-
+  ~graph_builder() { log::info("~graph_builder()"); }
+  
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;
 

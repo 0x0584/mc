@@ -14,25 +14,29 @@ OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
 CXX ?= g++
 
-CXXFLAGS = -std=c++17 -Iinclude -Wformat=2 -pedantic -Wundef -Wall -Wextra \
- -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
-
+CXXFLAGS = -std=c++23 -Wformat=2 -Wpedantic -Wundef -Wall -Wextra -Iinclude
 CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
+TDDFLAGS = -ltbb #-L/opt/local/libexec/tbb/lib
+PROFFLAGS = -lprofiler #-L/opt/local/lib
+
+LDFLAGS ?= $(TDDFLAGS)
+
 ifeq ($(RELEASE),1)
- CXXFLAGS += -DNDEBUG -O3
+ CXXFLAGS += -DNDEBUG -O3 -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
 else
- CXXFLAGS += -DDEBUG -g3 -O2
+ CXXFLAGS += -DDEBUG -g3 -O2 -fno-omit-frame-pointer
+ LDFLAGS += $(PROFFLAGS)
+endif
+
+
+ifeq ($(USE_CACHE),1)
+ CXXFLAGS += -DUSE_CACHE
 endif
 
 ifeq ($(LOG),1)
  CXXFLAGS += -DLOG
 endif
-
-TDDFLAGS = -ltbb -L/opt/local/libexec/tbb/lib
-PROFFLAGS = -lprofiler -L/opt/local/lib
-
-LDFLAGS ?= $(TDDFLAGS) $(PROFFLAGS)
 
 $(PROGRAM): $(OBJECTS) $(HEADERS)
 	@echo CXX $@

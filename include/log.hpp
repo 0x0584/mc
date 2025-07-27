@@ -59,7 +59,7 @@ struct log {
       oss << COL_BOLD;
     }
     oss << duration(begin, end) << "s";
-    if (flags & ansi_colours) {
+    if ((flags & ansi_colours) || (flags & bold)) {
       oss << COL_RESET;
     }
     return oss.str();

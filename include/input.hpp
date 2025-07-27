@@ -127,6 +127,8 @@ struct input {
               "with", num_v, "vertices and", num_e, "edges");
   }
 
+  ~input() { log::info("~input()"); }
+  
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
 

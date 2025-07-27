@@ -22,10 +22,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <execution>
 #include <functional>
 #include <future>
-#include <condition_variable>
 #include <memory_resource>
 #include <mutex>
 #include <shared_mutex>
@@ -45,8 +45,8 @@ using namespace std::chrono_literals;
 
 // #define NDEBUG
 
-#include "thread.hpp"
 #include "enumerator.hpp"
+#include "thread.hpp"
 
 namespace mc {
 class multithreaded {
@@ -81,18 +81,17 @@ private:
 
   void solution(flavour algo, std::size_t upper_bound);
 
-  bool enlarge_clique_size(std::uint32_t thread_id, std::size_t &max_clique_size,
-                           std::size_t depth);
+  bool enlarge_clique_size(std::uint32_t thread_id,
+                           std::size_t &max_clique_size, std::size_t depth);
 
   void branch_exact(std::uint32_t thread_id, enumerator::key v,
-                    std::vector<enumerator::key> &neighs,
-                    std::vector<enumerator::colour> &colours,
+                    enumerator::sorted_keys &sorted_neighs,
                     std::vector<enumerator::key> &clique,
                     std::size_t &max_clique_size, std::size_t upper_bound,
                     std::size_t &num_nodes, std::size_t depth = 1);
 
   void branch_heuristic(std::uint32_t thread_id, enumerator::key v,
-                        std::vector<enumerator::key> &neighs,
+                        enumerator::sorted_keys &sorted_neighs,
                         std::vector<enumerator::key> &clique,
                         std::size_t &max_clique_size, std::size_t upper_bound,
                         std::size_t &num_nodes, std::size_t depth = 1);
@@ -103,6 +102,8 @@ public:
   explicit multithreaded(graph G) : E(std::move(G)) {
     log::info("Number of available Threads", thread::num_threads);
   }
+
+  ~multithreaded() { log::info("~multithreaded()"); }
 
   std::vector<graph::vertex>
   solve(flavour algo = flavour::exact,
