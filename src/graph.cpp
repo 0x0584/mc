@@ -18,12 +18,14 @@
 // USA.
 
 #include "graph.hpp"
+#include "thread.hpp"
+#include <list>
 
 namespace mc {
 void graph::print() const {
   std::ostringstream oss;
   oss << (undirected ? "Undirected" : "Directed")
-      << " Graph (vertices=" << A.size() << ", edges=" << edge_count << ")\n";
+      << " Graph (vertices=" << A.size() << ", edges=" << _edge_count << ")\n";
   for (const auto &[v, neighs] : A) {
     oss << v << " { ";
     for (vertex u : neighs) {
@@ -34,17 +36,19 @@ void graph::print() const {
   log::print(oss.str());
 }
 
-bool graph::add_edge_undirected(vertex u, vertex v) {
+bool graph::add_edge_undirected(vertex u, vertex v, std::size_t edge_set_size) {
   neighbours_set &u_neighs = A[u];
   if (u_neighs.empty()) {
     u_neighs = neighbours_set{&edges_pool};
+    u_neighs.reserve(edge_set_size);
   }
   if (u_neighs.emplace(v).second) {
-    ++edge_count;
+    ++_edge_count;
     if (undirected) {
       neighbours_set &v_neighs = A[v];
       if (v_neighs.empty()) {
         v_neighs = neighbours_set{&edges_pool};
+        v_neighs.reserve(edge_set_size);
       }
       if (not v_neighs.emplace(u).second) {
         log::info("redundant edge from", v, "to", u);
@@ -61,22 +65,34 @@ bool graph::add_edge_undirected(vertex u, vertex v) {
 bool graph_builder::read_single_vertex(graph::vertex &w,
                                        std::string::iterator &it,
                                        std::string::iterator end) {
-  auto skip = [end](std::string::iterator &it) {
+  auto seek_token = [end](auto &it) {
     while (it != end && (*it == feed::sep || *it == feed::deli)) {
       ++it;
     }
   };
-  auto read_vertex = [end](std::string::iterator &it) {
+  auto read_vertex = [end](auto &it) {
     int limit = 0;
     while (limit++ < 12 && it != end && *it != feed::sep && *it != feed::deli) {
       ++it;
     }
+    if (limit > 12)
+      throw std::runtime_error("vertex key is too large! abort parsing.");
   };
 
-  if (skip(it); it != end) {
-    std::string::iterator i = it;
+  auto parse_vertex = [](auto &left, auto &right) {
+    graph::vertex v = 0;
+    while (left != right && *left >= '0' && *left <= '9') {
+      v = v * 10 + unsigned(*left - '0');
+      ++left;
+    }
+    return v;
+  };
+
+  if (seek_token(it); it != end) {
+    auto start = it;
     read_vertex(it);
-    w = std::atol(std::string{i, it}.c_str());
+    w = parse_vertex(start, it);
+    //    w = std::atol(std::string{i, it}.c_str());
     return true;
   } else {
     return false;
@@ -88,15 +104,39 @@ graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
   auto begin = std::chrono::high_resolution_clock::now();
   std::mutex graph_mtx;
   graph G(vertices_pool, edges_pool);
+  G.A.reserve(feed.num_vertices());
   G.undirected = args::undirected;
+
+  std::atomic_uint tasks_count{0};
+  std::mutex tasks_mtx;
+  std::condition_variable tasks_barrier;
+  const std::size_t estimate_num_edges =
+      2.15 * feed.num_edges() / feed.num_vertices();
+  const std::size_t edges_per_chunk =
+      1.50 * feed.num_edges() / feed.estimate_chunks();
+  log::info("edges per task", edges_per_chunk, "/ num chunks",
+            feed.estimate_chunks(), "edge set estimate", estimate_num_edges);
+
   do {
+    {
+      std::unique_lock<std::mutex> lock(tasks_mtx);
+      tasks_barrier.wait(lock, [&tasks_count] {
+        return tasks_count.load(std::memory_order_acquire) <
+               thread::num_threads;
+      });
+      tasks_count.fetch_add(1, std::memory_order_release);
+    }
     std::string buffer = feed.read_chunk();
     Q.emplace_back(std::async(
-        std::launch::deferred,
         [&, this](std::string buffer) {
+          // std::pmr::list<std::pair<graph::vertex, graph::vertex>>
+          // local_edges;
+          std::pmr::vector<std::pair<graph::vertex, graph::vertex>> local_edges;
+          local_edges.reserve(edges_per_chunk);
           std::string::iterator it = buffer.begin();
           int vertices_read = 2;
-          for (graph::vertex u, v; vertices_read == 2;) {
+          for (graph::vertex u = graph::nil_vertex, v = graph::nil_vertex;
+               vertices_read == 2;) {
             vertices_read = read_single_vertex(u, it, buffer.end()) +
                             read_single_vertex(v, it, buffer.end());
             if (vertices_read != 2) {
@@ -106,9 +146,20 @@ graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
               continue;
             }
 
-            std::unique_lock lock(graph_mtx);
-            G.add_edge_undirected(u, v);
+            local_edges.emplace_back(u, v);
           }
+          // log::info("edges read:", local_edges.size());
+          {
+            std::unique_lock lock(graph_mtx);
+            for (auto [u, v] : local_edges) {
+              G.add_edge_undirected(u, v, estimate_num_edges);
+            }
+          }
+          {
+            std::unique_lock<std::mutex> lock(tasks_mtx);
+            tasks_count.fetch_sub(1, std::memory_order_release);
+          }
+          tasks_barrier.notify_one();
         },
         std::move(buffer)));
   } while (feed);
@@ -116,11 +167,11 @@ graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
 
   auto end = std::chrono::high_resolution_clock::now();
 
-  log::info("Graph with", feed.num_vertices(), "vertices and", G.edge_count,
+  log::info("Graph with", feed.num_vertices(), "vertices and", G._edge_count,
             "edges was read in", log::time_diff(begin, end, log::bold));
 
   assert(G.A.size() == feed.num_vertices());
-  assert(G.edge_count == feed.num_edges());
+  assert(G._edge_count == feed.num_edges());
 
   return G;
 }

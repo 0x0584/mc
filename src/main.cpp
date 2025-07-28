@@ -42,11 +42,26 @@ int main(int argc, char *argv[]) {
   args::parse(argc, argv);
 
   try {
+    ProfilerStart("read_graph.prof");	
     input in;
     graph_builder builder(in);
-	
     std::pmr::monotonic_buffer_resource vertices_pool;
-    std::pmr::monotonic_buffer_resource edges_pool;	
+    std::pmr::monotonic_buffer_resource edges_pool;
+    graph G = builder.build(vertices_pool, edges_pool);
+    ProfilerStop();
+
+    ProfilerStart("enumerate_graph.prof");
+    enumerator E(G);
+    ProfilerStop();
+
+    ProfilerStart("colour_graph.prof");	
+    std::vector<enumerator::key> keys(E.vertex_count());
+    std::iota(keys.begin(), keys.end(), 0u);
+    auto sorted_vertices = E.greedy_colour_sort(std::move(keys));
+    ProfilerStop();
+	
+    return -1;
+
     multithreaded algo(builder.build(vertices_pool, edges_pool));
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       if (args::num_turns != 1)

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <fstream>
 
 #include "flavour.hpp"
@@ -100,6 +101,9 @@ struct args {
   }
 
   static inline std::istream &stream() { return stdin ? std::cin : file; }
+  static inline std::size_t stream_size() {
+    return stdin ? 1 : std::filesystem::file_size(filename);
+  }
 
   static inline std::ifstream file;
   static inline long num_turns = 5;
@@ -128,7 +132,7 @@ struct input {
   }
 
   ~input() { log::info("~input()"); }
-  
+
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
 
@@ -156,7 +160,7 @@ struct input {
 };
 
 struct feed {
-  static inline const std::int64_t CHUNK_SIZE = 16384; // 16KB
+  static inline const std::int64_t CHUNK_SIZE = 1024 * 1024; // 1MB
   static inline const char deli = '\n', sep = ' ';
 
   using buffer = std::array<char, CHUNK_SIZE>;
@@ -176,7 +180,7 @@ struct feed {
 
   inline operator bool() { return reading(); }
   inline std::size_t estimate_chunks() const {
-    return 1 + in.num_e / CHUNK_SIZE;
+    return 1 + args::stream_size() / CHUNK_SIZE;
   }
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }

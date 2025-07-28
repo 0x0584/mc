@@ -14,17 +14,16 @@ OBJECTS = $(patsubst %.cpp,%.o,$(SOURCES))
 
 CXX = g++
 
-CXXFLAGS = -std=c++23 -Iinclude
+CXXFLAGS = -std=c++23 -march=native -mtune=native -Iinclude
 CXXFLAGS += -Wformat=2 -Wall -Wextra -Wpedantic -Wundef -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
 CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
 
-LDFLAGS = -ltbb
+LDFLAGS = -ltbb -lprofiler
 
 ifeq ($(RELEASE),1)
  CXXFLAGS += -DNDEBUG -O3
 else
  CXXFLAGS += -DDEBUG -g3 -O2 -fno-omit-frame-pointer
- LDFLAGS += -lprofiler
 endif
 
 ifeq ($(LOG),1)

@@ -37,6 +37,7 @@ namespace mc {
 struct enumerator {
   using adjacency_vector =
       std::vector<std::pair<graph::vertex, graph::neighbours_set>>;
+
   // this is a premitive type too, same as graph::vertex so changes in the
   // implementation are required in order to avoid overhead of copying
   // instead of using references or moving the object
@@ -48,25 +49,28 @@ struct enumerator {
     friend enumerator;
 
     sorted_keys() {};
+
     explicit sorted_keys(
         std::pair<std::vector<key>, std::vector<colour>> sorted)
         : keys_colours(std::move(sorted)) {}
 
-    colour highest_colour() const { return keys_colours.second.back(); }
+    inline colour highest_colour() const { return keys_colours.second.back(); }
 
-    key key_with_highest_colour() const { return keys_colours.first.back(); }
-    key pop_key_with_highest_colour() {
+    inline key key_with_highest_colour() const {
+      return keys_colours.first.back();
+    }
+    inline key pop_key_with_highest_colour() {
       key k = keys_colours.first.back();
       keys_colours.first.pop_back();
       keys_colours.second.pop_back();
       return k;
     }
 
-    const std::vector<key> &keys() const { return keys_colours.first; }
+    inline const std::vector<key> &keys() const { return keys_colours.first; }
 
-    std::size_t size() const { return keys_colours.first.size(); }
+    inline std::size_t size() const { return keys_colours.first.size(); }
 
-    bool empty() const { return keys_colours.first.empty(); }
+    inline bool empty() const { return keys_colours.first.empty(); }
 
     std::string to_string() const {
       std::ostringstream oss;
@@ -126,26 +130,18 @@ struct enumerator {
 
   void draw(const std::vector<graph::vertex> &clq) const;
 
-  void cache_hit_progress() const;
-
   sorted_keys greedy_colour_sort(std::vector<key> &&vertices) const;
 
   bool is_clique(const std::vector<key> &clique) const;
 
   inline std::size_t vertex_count() const { return V.size(); }
 
-  std::size_t get_cache_hits() { return cache_hits; }
-  void reset_cache_hits() { cache_hits = 0; }
+  inline std::size_t get_cache_hits() { return cache_hits; }
 
-  // private:
-  adjacency_vector V; // Enumertaed vertices
+  inline void reset_cache_hits() { cache_hits = 0; }
 
-  template <typename T> static void print_vector(const std::vector<T> &v) {
-    for (T i : v) {
-      std::cout << i << " ";
-    }
-    std::cout << "\n";
-  }
+private:
+  void cache_hit_progress() const;
 
   struct colouring_cache {
     template <typename T> struct vector_hash {
@@ -254,12 +250,14 @@ struct enumerator {
 
   mutable std::shared_mutex cache_mtx;
   mutable colouring_cache cache;
-
   mutable std::atomic_size_t cache_hits{0};
 
-  template <typename T> using vector_2d = std::vector<std::vector<T>>;
-  vector_2d<key> A;  // Adjacency List for fast neighbourhood deduction
-  vector_2d<bool> B; // Adjacency Matrix for fast edge probing
+  adjacency_vector V; // Enumertaed vertices
+
+  // Adjacency List for fast neighbourhood deduction
+  std::vector<std::vector<key>> A;
+  // Adjacency Matrix for fast edge probing
+  std::vector<std::vector<bool>> B;
 };
 } // namespace mc
 

@@ -39,6 +39,8 @@ struct graph {
   // copying the  objects rather than either referencing them or moving them
   using vertex = unsigned;
 
+  static inline const vertex nil_vertex = -1u;
+  
   using neighbours_set = std::pmr::unordered_set<vertex>;
   using adjacency_map = std::pmr::unordered_map<vertex, neighbours_set>;
 
@@ -60,14 +62,16 @@ struct graph {
   inline const neighbours_set &neighbours(vertex v) const { return A.at(v); }
   inline const adjacency_map &adjacency() const { return A; }
   inline bool directed() { return not undirected; }
+  inline std::size_t vertex_count() const { return A.size(); }
+  inline std::size_t edge_count() const { return _edge_count; }
+  inline const adjacency_map &adjacency_list() const { return A; }
+  bool add_edge_undirected(vertex u, vertex v, std::size_t edge_set_size = 0);
 
-  bool add_edge_undirected(vertex u, vertex v);
-  
   void print() const;
 
 private:
   bool undirected = false;
-  std::size_t edge_count = 0;
+  std::size_t _edge_count = 0;
 
   std::pmr::monotonic_buffer_resource &vertices_pool;
   std::pmr::monotonic_buffer_resource &edges_pool;
@@ -79,7 +83,8 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(input &in) : feed(in) {
+  explicit graph_builder(input &in)
+      : feed(in) {
     Q.reserve(feed.estimate_chunks());
   }
   ~graph_builder() { log::info("~graph_builder()"); }
