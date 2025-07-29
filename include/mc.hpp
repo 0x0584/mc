@@ -21,26 +21,7 @@
 #define MAXCLIQUE_HPP
 
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <execution>
-#include <functional>
-#include <future>
-#include <memory_resource>
-#include <mutex>
 #include <shared_mutex>
-#include <thread>
-#include <utility>
-
-using namespace std::chrono_literals;
-
-#include <algorithm>
-#include <deque>
-#include <map>
-#include <numeric>
-#include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 // #define NDEBUG
@@ -100,10 +81,10 @@ public:
   static inline std::size_t no_upper_bound = -1u;
 
   explicit multithreaded(graph G) : E(G) {
-    log::info("Number of available Threads", thread::num_threads);
+    logger::info("Number of available Threads", thread::num_threads);
   }
 
-  ~multithreaded() { log::info("~multithreaded()"); }
+  ~multithreaded() { logger::info("~multithreaded()"); }
 
   std::vector<graph::vertex>
   solve(flavour algo = flavour::exact,

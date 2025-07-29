@@ -17,13 +17,15 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
+#include <numeric>
+#include <set>
+#include <shared_mutex>
+
 #include "enumerator.hpp"
 #include "thread.hpp"
 
-#include <numeric>
-#include <shared_mutex>
-
 namespace mc {
+
 void enumerator::print() const {
   std::ostringstream oss;
   oss << "Enumerated Vertices\n";
@@ -35,7 +37,7 @@ void enumerator::print() const {
     oss << "}\n";
   }
   oss << "\n";
-  log::print(oss.str());
+  logger::print(oss.str());
 }
 
 void enumerator::draw(const std::vector<graph::vertex> &clq) const {
@@ -159,15 +161,15 @@ enumerator::enumerator(graph &G) : cache(1'000'000) {
   }
 
   auto end = std::chrono::high_resolution_clock::now();
-  log::info("Vertices were enumerated in",
-            log::time_diff(begin, end, log::bold));
+  logger::info("Vertices were enumerated in",
+               logger::time_diff(begin, end, logger::bold));
 }
 
 inline void enumerator::cache_hit_progress() const {
   static const std::size_t cache_portion = cache.capacity() * .05;
   std::size_t hits = cache_hits;
   if (hits >= cache_portion && hits % cache_portion == 0) {
-    log::info(COL_GREEN, "cache total_hits", hits);
+    logger::info(COL_GREEN, "cache total_hits", hits);
   }
 }
 
@@ -175,15 +177,6 @@ inline void enumerator::cache_hit_progress() const {
 enumerator::sorted_keys
 enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
   assert(not vertices.empty());
-
-  std::vector<colour> colours;
-  std::unique_lock<std::shared_mutex> cache_write_lock(cache_mtx,
-                                                       std::defer_lock);
-  thread::scope_dtor unlock_cache([&cache_write_lock]() {
-    if (cache_write_lock.owns_lock()) {
-      cache_write_lock.unlock();
-    }
-  });
 
   {
     std::shared_lock<std::shared_mutex> cache_read_lock(cache_mtx);
@@ -194,12 +187,14 @@ enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
     }
   }
 
-  cache_write_lock.lock();
+  std::unique_lock<std::shared_mutex> cache_write_lock(cache_mtx);
   if (auto precomputed = cache.get(vertices); precomputed.has_value()) {
     cache_hits++;
     cache_hit_progress();
     return sorted_keys(precomputed.value());
   }
+
+  std::vector<colour> colours;
 
   // dividing vertices into colour classes based on their order of adjacency
   // appearance, then rearrange them based on colour priority

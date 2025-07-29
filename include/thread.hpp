@@ -21,35 +21,95 @@
 #define THREAD_HPP
 
 #ifndef THREADS_PER_CORE
-#define THREADS_PER_CORE 8
+#define THREADS_PER_CORE 2
 #endif
 
+#include <cassert>
 #include <cstdint>
+#include <queue>
 #include <thread>
 
-#include "log.hpp"
+#include "core.hpp"
 
 namespace thread {
-  const std::uint32_t threads_per_core = THREADS_PER_CORE;
+const std::uint32_t threads_per_core = THREADS_PER_CORE;
 const std::uint32_t num_threads =
     std::thread::hardware_concurrency() * threads_per_core;
 
-// since the thread can return on several conditions, it is
-// practical to use a scope destructor to ensure that threads are
-// marked as available not matter the branch
-template <typename Callable> struct scope_dtor {
-  scope_dtor(const scope_dtor &) = delete;
-  scope_dtor(scope_dtor &&) = delete;
+template <typename Task> struct pool {
+  static inline const std::uint16_t max_num_threads = 255;
 
-  inline explicit scope_dtor(Callable &&fn)
-      : callback(std::forward<Callable>(fn)) {}
-  inline ~scope_dtor() { callback(); }
+  pool(const pool &) = delete;
+  pool(pool &&) = delete;
 
-  scope_dtor &operator=(const scope_dtor &) = delete;
-  scope_dtor &operator=(scope_dtor &&) = delete;
+  explicit pool(std::uint16_t pool_size = 1) {
+    assert(pool_size > 0);
+    assert(pool_size <= num_threads);
+    _pool.resize(pool_size);
+    for (std::uint16_t thread_id = 0u; thread_id < _pool.size(); ++thread_id) {
+      _available.push(thread_id);
+    }
+  }
+
+  ~pool() {
+    logger::debug("~pool()");
+    join();
+  }
+
+  pool &operator=(const pool &) = delete;
+  pool &operator=(pool &&) = delete;
+
+  void exec(Task &&task) {
+    std::uint16_t thread_id;
+    if (std::unique_lock<std::mutex> pool_lock(_pool_mtx); _available.empty()) {
+      _pending_tasks.emplace(std::move(task));
+      pool_lock.unlock();
+      logger::debug("pool is full!");
+      return;
+    } else {
+      thread_id = _available.front();
+      _available.pop();
+    }
+    logger::debug(thread_id, "got task..");
+    _pool[thread_id] = std::thread(
+        [this, thread_id](Task callback) mutable {
+          callback();
+          _process_pending(thread_id);
+          _available.emplace(thread_id);
+          logger::info(thread_id, "is available");
+        },
+        std::forward<Task>(task));
+  }
+
+  void join() {
+    logger::debug("joining threads..");
+    for (auto &task : _pool) {
+      if (task.joinable()) {
+        task.join();
+      }
+    }
+    logger::debug("all threads joined.");
+  }
 
 private:
-  Callable callback;
+  void _process_pending(std::uint16_t thread_id) {
+    while (true) {
+      std::unique_lock<std::mutex> pool_lock(_pool_mtx);
+      if (_pending_tasks.empty()) {
+        break;
+      }
+      Task pending_task = std::move(_pending_tasks.front());
+      _pending_tasks.pop();
+      pool_lock.unlock();
+      logger::debug(thread_id, "is processing a pending task");
+      pending_task();
+    }
+  }
+
+  std::queue<Task> _pending_tasks;
+  std::queue<std::uint16_t> _available;
+  std::vector<std::thread> _pool;
+  std::mutex _pool_mtx;
 };
-}; // namespace thread
+} // namespace thread
 #endif // THREAD_HPP

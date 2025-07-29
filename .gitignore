@@ -19,3 +19,4 @@ mc
 /.DS_Store
 /graphs/
 /.projectile-cache.eld
+*.prof

@@ -29,8 +29,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "core.hpp"
 #include "flavour.hpp"
-#include "log.hpp"
 
 namespace mc {
 struct args {
@@ -50,15 +50,17 @@ struct args {
       case 's':
         expect_size = true;
         size = static_cast<std::size_t>(std::atol(optarg));
-        log::info("Expecting a Max Clique of size", size);
+        logger::info("Expecting a Max Clique of size", size);
         break;
       case 'u':
         upper_bound = static_cast<std::size_t>(std::atol(optarg));
-        log::info("Expected Upper Bound for Max Clique of size", upper_bound);
+        logger::info("Expected Upper Bound for Max Clique of size",
+                     upper_bound);
         break;
       case 'l':
         lower_bound = static_cast<std::size_t>(std::atol(optarg));
-        log::info("Expected Lower Bound for Max Clique of size", lower_bound);
+        logger::info("Expected Lower Bound for Max Clique of size",
+                     lower_bound);
         break;
       case 'e':
         if (exec_mode == flavour::heuristic) {
@@ -91,12 +93,12 @@ struct args {
       }
     }
 
-    log::info("Running", args::exec_mode);
+    logger::info("Running", args::exec_mode);
 
     if (stdin) {
-      log::info("Reading from STDIN");
+      logger::info("Reading from STDIN");
     } else {
-      log::info("Reading from", filename);
+      logger::info("Reading from", filename);
     }
   }
 
@@ -106,7 +108,7 @@ struct args {
   }
 
   static inline std::ifstream file;
-  static inline long num_turns = 5;
+  static inline long num_turns = 1;
   static inline bool expect_size, undirected = true, stdin = true;
   static inline std::size_t size = -1u, upper_bound = -1u, lower_bound = 1;
   static inline std::string filename;
@@ -124,14 +126,15 @@ struct input {
       throw std::runtime_error("Could not parse input header, use -?");
     }
     if (not args::expect_size && (args::expect_size = fetcher(args::size))) {
-      log::info("Expecting a Max Clique of size", args::size);
+      logger::info("Expecting a Max Clique of size", args::size);
     }
 
-    log::info("Source Graph is", (args::undirected ? "Undirected" : "Directed"),
-              "with", num_v, "vertices and", num_e, "edges");
+    logger::info("Source Graph is",
+                 (args::undirected ? "Undirected" : "Directed"), "with", num_v,
+                 "vertices and", num_e, "edges");
   }
 
-  ~input() { log::info("~input()"); }
+  ~input() { logger::info("~input()"); }
 
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
@@ -174,7 +177,7 @@ struct feed {
 
   ~feed() {
     if (tail_remaining != remaining.begin()) {
-      log::error("INVALID file: no NL at the end of the file");
+      logger::error("INVALID file: no NL at the end of the file");
     }
   }
 
@@ -202,8 +205,8 @@ struct feed {
     while (delimiter != buff.begin() && *--delimiter != feed::deli)
       ;
     if (delimiter == buff.begin()) {
-      log::error("FAILURE: chunk_size=", CHUNK_SIZE,
-                 " exceeded! recompile with a bigger size");
+      logger::error("FAILURE: chunk_size=", CHUNK_SIZE,
+                    " exceeded! recompile with a bigger size");
     }
 
     const std::size_t buffer_size =
@@ -217,7 +220,7 @@ struct feed {
 private:
   inline bool reading() {
     if (in->bad()) {
-      log::error("UNEXPECTED READ FAILURE");
+      logger::error("UNEXPECTED READ FAILURE");
     }
     return not in->eof() && not in->fail();
   }
@@ -226,7 +229,7 @@ private:
   read_next(std::streamsize size_read) {
     buffer read;
     if (in->read(read.data(), size_read); in->bad()) {
-      log::error("FAILURE: cannot read from stream");
+      logger::error("FAILURE: cannot read from stream");
     }
     return {read, in->gcount()};
   }

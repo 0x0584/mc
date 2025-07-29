@@ -17,63 +17,47 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
-#include <gperftools/profiler.h>
+#include <climits>
+#include <functional>
+#include <numeric>
+#include <random>
+#include <set>
+
+#include "profiler.hpp"
 
 #include "graph.hpp"
 #include "mc.hpp"
+#include "thread.hpp"
 
-namespace mc {
-void print_clique(const std::vector<graph::vertex> &clique) {
-  const std::set<graph::vertex> m(clique.cbegin(), clique.cend());
-  std::ostringstream oss;
-  oss << "Max Clique has " << m.size() << " vertices { ";
-  for (graph::vertex e : m) {
-    oss << e << " ";
-  }
-  oss << "}";
-  log::info(oss.str());
-}
-} // namespace mc
+using namespace mc;
 
 int main(int argc, char *argv[]) {
-  using namespace mc;
-
-  log::setup_logger();
   args::parse(argc, argv);
 
   try {
-    ProfilerStart("read_graph.prof");	
     input in;
     graph_builder builder(in);
     std::pmr::monotonic_buffer_resource vertices_pool;
     std::pmr::monotonic_buffer_resource edges_pool;
-    graph G = builder.build(vertices_pool, edges_pool);
-    ProfilerStop();
-
-    ProfilerStart("enumerate_graph.prof");
-    enumerator E(G);
-    ProfilerStop();
-
-    ProfilerStart("colour_graph.prof");	
-    std::vector<enumerator::key> keys(E.vertex_count());
-    std::iota(keys.begin(), keys.end(), 0u);
-    auto sorted_vertices = E.greedy_colour_sort(std::move(keys));
-    ProfilerStop();
-	
-    return -1;
-
     multithreaded algo(builder.build(vertices_pool, edges_pool));
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       if (args::num_turns != 1)
-        log::info("Turn", turn, "/", args::num_turns);
-      const std::vector<graph::vertex> clique = algo.solve(args::exec_mode);
-      print_clique(clique);
+        logger::info("Turn", turn, "/", args::num_turns);
+      auto clique = algo.solve(args::exec_mode);
+      auto m = std::set<graph::vertex>(clique.cbegin(), clique.cend());
+      std::ostringstream oss;
+      oss << "Max Clique has " << m.size() << " vertices { ";
+      for (graph::vertex e : m) {
+        oss << e << " ";
+      }
+      oss << "}";
+      logger::print(oss.str());
       if (args::draw) {
         algo.draw(clique);
       }
     }
   } catch (const std::exception &e) {
-    log::info(e.what());
+    logger::info(e.what());
     return EXIT_FAILURE;
   }
 

@@ -24,13 +24,12 @@
 
 #include <future>
 #include <memory_resource>
-#include <ostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "core.hpp"
 #include "input.hpp"
-#include "log.hpp"
 
 namespace mc {
 struct graph {
@@ -40,7 +39,7 @@ struct graph {
   using vertex = unsigned;
 
   static inline const vertex nil_vertex = -1u;
-  
+
   using neighbours_set = std::pmr::unordered_set<vertex>;
   using adjacency_map = std::pmr::unordered_map<vertex, neighbours_set>;
 
@@ -51,7 +50,7 @@ struct graph {
                  std::pmr::monotonic_buffer_resource &edges_pool)
       : vertices_pool(vertices_pool), edges_pool(edges_pool),
         A(&vertices_pool) {}
-  ~graph() { log::info("~graph()"); }
+  ~graph() { logger::info("~graph()"); }
 
   graph(const graph &) = delete;
   graph(graph &&) = default;
@@ -83,11 +82,10 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(input &in)
-      : feed(in) {
+  explicit graph_builder(input &in) : feed(in) {
     Q.reserve(feed.estimate_chunks());
   }
-  ~graph_builder() { log::info("~graph_builder()"); }
+  ~graph_builder() { logger::info("~graph_builder()"); }
 
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;

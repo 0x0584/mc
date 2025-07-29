@@ -1,0 +1,12 @@
+-std=c++23
+-Iinclude
+-fexperimental-library
+-Wformat=2
+-Wpedantic
+-Wundef
+-Wall
+-Wextra
+-Wdisabled-optimization
+-Woverloaded-virtual
+-Wsign-conversion
+-Wpessimizing-move

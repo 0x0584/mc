@@ -2,7 +2,7 @@ PROGRAM = max-clique
 
 LOG ?= 0
 RELEASE ?= 1
-THREADS_PER_CORE ?= 8
+THREADS_PER_CORE ?= 2
 
 SOURCES = src/graph.cpp src/enumerator.cpp src/flavour.cpp \
  src/mc.cpp src/main.cpp
