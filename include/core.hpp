@@ -152,7 +152,7 @@ inline constexpr const char *get_level_str(LogLevel level) {
       std::unique_lock<std::mutex> lock(queue_mtx);
       stop_logger = true;
     }
-    cv.notify_all(); // Notify the logger thread to wake up and exit
+    cv.notify_one();
     if (logger_thread.joinable()) {
       logger_thread.join();
     }

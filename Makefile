@@ -3,6 +3,7 @@ PROGRAM = max-clique
 LOG ?= 0
 RELEASE ?= 1
 THREADS_PER_CORE ?= 2
+LOG_LEVEL ?= Info
 
 SOURCES = src/graph.cpp src/enumerator.cpp src/flavour.cpp \
  src/mc.cpp src/main.cpp
@@ -16,7 +17,7 @@ CXX = g++
 
 CXXFLAGS = -std=c++23 -march=native -mtune=native -Iinclude
 CXXFLAGS += -Wformat=2 -Wall -Wextra -Wpedantic -Wundef -Wdisabled-optimization -Woverloaded-virtual -Wsign-conversion -Wpessimizing-move
-CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE)
+CXXFLAGS += -DTHREADS_PER_CORE=$(THREADS_PER_CORE) -DLOG_LEVEL=$(LOG_LEVEL)
 
 LDFLAGS = -ltbb -lprofiler
 
@@ -24,10 +25,6 @@ ifeq ($(RELEASE),1)
  CXXFLAGS += -DNDEBUG -O3
 else
  CXXFLAGS += -DDEBUG -g3 -O2 -fno-omit-frame-pointer
-endif
-
-ifeq ($(LOG),1)
- CXXFLAGS += -DLOG
 endif
 
 $(PROGRAM): $(OBJECTS) $(HEADERS)

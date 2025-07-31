@@ -26,6 +26,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <queue>
 #include <thread>
 
@@ -36,7 +37,9 @@ const std::uint32_t threads_per_core = THREADS_PER_CORE;
 const std::uint32_t num_threads =
     std::thread::hardware_concurrency() * threads_per_core;
 
-template <typename Task> struct pool {
+struct pool {
+  using Task = std::function<void()>;
+
   static inline const std::uint16_t max_num_threads = 255;
 
   pool(const pool &) = delete;
@@ -72,13 +75,12 @@ template <typename Task> struct pool {
     }
     logger::debug(thread_id, "got task..");
     _pool[thread_id] = std::thread(
-        [this, thread_id](Task callback) mutable {
+        [this, thread_id, callback = std::forward<Task>(task)] mutable {
           callback();
           _process_pending(thread_id);
           _available.emplace(thread_id);
           logger::info(thread_id, "is available");
-        },
-        std::forward<Task>(task));
+        });
   }
 
   void join() {

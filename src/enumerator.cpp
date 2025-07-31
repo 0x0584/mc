@@ -173,7 +173,7 @@ inline void enumerator::cache_hit_progress() const {
   }
 }
 
-// XXX refactor the colouring part
+// TODO use dynamic colouring instead
 enumerator::sorted_keys
 enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
   assert(not vertices.empty());
@@ -231,8 +231,6 @@ enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
               std::back_inserter(vertices));
   }
 
-  // XXX greedy colouring sorting reorders the neighbours
-  // XXX neighbours reference is lost when moved from
   return sorted_keys(cache.set(vertices, colours));
 }
 
