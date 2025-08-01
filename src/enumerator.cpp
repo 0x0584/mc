@@ -17,12 +17,12 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
+#include <future>
 #include <numeric>
 #include <set>
 #include <shared_mutex>
 
 #include "enumerator.hpp"
-#include "thread.hpp"
 
 namespace mc {
 
@@ -40,7 +40,8 @@ void enumerator::print() const {
   logger::print(oss.str());
 }
 
-void enumerator::draw(const std::vector<graph::vertex> &clq) const {
+void enumerator::draw(
+    const std::vector<graph::vertex> &clq) const { // FIXME: optimise this
   std::set<graph::vertex> clique(clq.begin(), clq.end());
   std::ofstream file((args::stdin ? "out" : args::filename) + ".dot");
   std::set<std::set<graph::vertex>> edges;
@@ -110,6 +111,8 @@ enumerator::enumerator(graph &G) : cache(1'000'000) {
                             });
       });
 
+  logger::debug("Computed neighbourhood degrees");
+
   // switch the vertex container from std::unordered_map to std::vector
   V.resize(vertex_count);
   std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), V.begin(),
@@ -126,6 +129,8 @@ enumerator::enumerator(graph &G) : cache(1'000'000) {
                       (u.second.size() == v.second.size() &&
                        neighs_degree.at(u.first) < neighs_degree.at(v.first)));
             });
+
+  logger::debug("Sorted neighbourhood degrees");
 
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
@@ -169,7 +174,7 @@ inline void enumerator::cache_hit_progress() const {
   static const std::size_t cache_portion = cache.capacity() * .05;
   std::size_t hits = cache_hits;
   if (hits >= cache_portion && hits % cache_portion == 0) {
-    logger::info(COL_GREEN, "cache total_hits", hits);
+    logger::debug(COL_GREEN, "cache total_hits", hits);
   }
 }
 

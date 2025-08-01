@@ -20,15 +20,10 @@
 #ifndef GRAPH_HPP
 #define GRAPH_HPP
 
-#include <cassert>
-
-#include <future>
 #include <memory_resource>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
-#include "core.hpp"
 #include "input.hpp"
 
 namespace mc {
@@ -46,11 +41,12 @@ struct graph {
   friend struct enumerator;
   friend struct graph_builder;
 
-  explicit graph(std::pmr::monotonic_buffer_resource &vertices_pool,
-                 std::pmr::monotonic_buffer_resource &edges_pool)
+  explicit inline graph(std::pmr::monotonic_buffer_resource &vertices_pool,
+                        std::pmr::monotonic_buffer_resource &edges_pool)
       : vertices_pool(vertices_pool), edges_pool(edges_pool),
         A(&vertices_pool) {}
-  ~graph() { logger::info("~graph()"); }
+
+  ~graph() { logger::debug("~graph()"); }
 
   graph(const graph &) = delete;
   graph(graph &&) = default;
@@ -82,10 +78,9 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(input &in) : feed(in) {
-    Q.reserve(feed.estimate_chunks());
-  }
-  ~graph_builder() { logger::info("~graph_builder()"); }
+  explicit graph_builder(input &in) : feed(in) {}
+
+  ~graph_builder() { logger::debug("~graph_builder()"); }
 
   graph_builder &operator=(const graph_builder &) = delete;
   graph_builder &operator=(graph_builder &&) = delete;
@@ -97,7 +92,6 @@ struct graph_builder {
               std::pmr::monotonic_buffer_resource &edges_pool);
 
 private:
-  std::vector<std::future<void>> Q;
   mc::feed feed;
 };
 } // namespace mc

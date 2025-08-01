@@ -2,13 +2,12 @@
 #define CACHE_HPP
 
 #include <algorithm>
-#include <cassert>
 #include <list>
 #include <memory_resource>
 #include <mutex>
 #include <unordered_map>
 
-#include "core.hpp"
+#include "logger.hpp"
 
 namespace std {
 template <typename T> struct hash<vector<T>> {
@@ -54,7 +53,7 @@ struct lru_cache {
                                             key_hash, key_equal>;
   explicit lru_cache(std::size_t capacity)
       : _capacity(capacity), keys(&buff), store(&buff) {
-    assert(capacity > 0);
+    assert(capacity > 0, "cache capacity cannot be 0");
     logger::debug("Cache capacity is", capacity);
     keys.reserve(capacity);
   }
@@ -88,7 +87,7 @@ struct lru_cache {
       } else {
         it = store.emplace(store.begin(), std::move(k), std::move(v));
         if (store.size() == _capacity) {
-          logger::debug(COL_MAGENTA, "Cache is full!");
+          logger::debug("Cache is full!");
         }
       }
       keys.emplace(it->first, it);

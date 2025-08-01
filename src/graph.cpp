@@ -100,80 +100,61 @@ bool graph_builder::read_single_vertex(graph::vertex &w,
 
 graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
                            std::pmr::monotonic_buffer_resource &edges_pool) {
-  auto begin = std::chrono::high_resolution_clock::now();
   std::mutex graph_mtx;
   graph G(vertices_pool, edges_pool);
   G.A.reserve(feed.num_vertices());
   G.undirected = args::undirected;
 
-  std::atomic_uint tasks_count{0};
-  std::mutex tasks_mtx;
-  std::condition_variable tasks_barrier;
-  const std::size_t estimate_num_edges =
-      2.15 * feed.num_edges() / feed.num_vertices();
-  const std::size_t edges_per_chunk =
-      1.50 * feed.num_edges() / feed.estimate_chunks();
-  logger::info("edges per task", edges_per_chunk, "/ num chunks",
-               feed.estimate_chunks(), "edge set estimate", estimate_num_edges);
+  logger::debug("Num of chunks", feed.estimate_chunks());
+  logger::debug("Reading", feed.edges_per_chunk(),
+                "edges per chunk (estimate)");
+  logger::debug("Number of edges per vertex set estimate",
+                feed.estimate_num_edges());
 
+  thread::pool pool(args::num_threads); // XXX switch to a thread pool
+  auto begin = std::chrono::high_resolution_clock::now();
   do {
-    {
-      std::unique_lock<std::mutex> lock(tasks_mtx);
-      tasks_barrier.wait(lock, [&tasks_count] {
-        return tasks_count.load(std::memory_order_acquire) <
-               thread::num_threads;
-      });
-      tasks_count.fetch_add(1, std::memory_order_release);
-    }
-    std::string buffer = feed.read_chunk();
-    Q.emplace_back(std::async( // TODO switch to a thread pool
-        [&, this](std::string buffer) {
-          // std::pmr::list<std::pair<graph::vertex, graph::vertex>>
-          // local_edges;
-          std::pmr::vector<std::pair<graph::vertex, graph::vertex>> local_edges;
-          local_edges.reserve(edges_per_chunk);
-          std::string::iterator it = buffer.begin();
-          int vertices_read = 2;
-          for (graph::vertex u = graph::nil_vertex, v = graph::nil_vertex;
-               vertices_read == 2;) {
-            vertices_read = read_single_vertex(u, it, buffer.end()) +
-                            read_single_vertex(v, it, buffer.end());
-            if (vertices_read != 2) {
-              break;
-            } else if (u == v) {
-              logger::info("found cycle for vertex", u);
-              continue;
-            }
-
-            local_edges.emplace_back(u, v);
-          }
-          // logger::info("edges read:", local_edges.size());
-          {
-            std::unique_lock lock(graph_mtx);
-            for (auto [u, v] : local_edges) {
-              G.add_edge_undirected(u, v, estimate_num_edges);
-            }
-          }
-          {
-            std::unique_lock<std::mutex> lock(tasks_mtx);
-            tasks_count.fetch_sub(1, std::memory_order_release);
-          }
-          tasks_barrier.notify_one();
-        },
-        std::move(buffer)));
+    pool.exec([&, this, buff = feed.read_chunk()](std::uint16_t) mutable {
+      std::pmr::vector<std::pair<graph::vertex, graph::vertex>> local_edges;
+      local_edges.reserve(feed.edges_per_chunk());
+      std::string::iterator it = buff.begin();
+      int vertices_read = 2;
+      for (graph::vertex u = graph::nil_vertex, v = graph::nil_vertex;
+           vertices_read == 2;) {
+        vertices_read = read_single_vertex(u, it, buff.end()) +
+                        read_single_vertex(v, it, buff.end());
+        if (vertices_read != 2) {
+          break;
+        } else if (u == v) {
+          logger::warn("found cycle for vertex", u);
+          continue;
+        }
+        local_edges.emplace_back(u, v);
+      }
+      logger::debug("edges read:", local_edges.size());
+      {
+        std::unique_lock lock(graph_mtx);
+        for (auto [u, v] : local_edges) {
+          G.add_edge_undirected(u, v, feed.estimate_num_edges());
+        }
+      }
+    });
   } while (feed);
-  std::for_each(Q.begin(), Q.end(), [](std::future<void> &f) { f.get(); });
-
+  pool.join();
   auto end = std::chrono::high_resolution_clock::now();
 
   logger::info("Graph with", feed.num_vertices(), "vertices and", G._edge_count,
                "edges was read in",
                logger::time_diff(begin, end, logger::bold));
 
+  if (G.A.size() != feed.num_vertices())
+    logger::warn("Number of vertices read mismatched");
+  if (G._edge_count != feed.num_edges())
+    logger::warn("Number of edges read mismatched");
+
   assert(G.A.size() == feed.num_vertices());
   assert(G._edge_count == feed.num_edges());
 
   return G;
 }
-
 } // namespace mc

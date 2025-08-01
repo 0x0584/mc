@@ -1,9 +1,16 @@
-
 enable_testing()
-set(TIMEOUT_SMALL 0.1)
-set(TIMEOUT_MEDIUM 0.3)
-set(TIMEOUT_LARGE 2)
-set(TIMEOUT_HUGE 5)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(TIMEOUT_SMALL 5)
+  set(TIMEOUT_MEDIUM 10)
+  set(TIMEOUT_LARGE 20)
+  set(TIMEOUT_HUGE 30)
+else()
+  set(TIMEOUT_SMALL 0.1)
+  set(TIMEOUT_MEDIUM 0.3)
+  set(TIMEOUT_LARGE 2)
+  set(TIMEOUT_HUGE 5)
+endif()
 
 file(GLOB TEST_GRAPHS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "graphs/*.mtx")
 
@@ -34,8 +41,8 @@ foreach(graph_file IN LISTS TEST_GRAPHS)
     set(timeout ${TIMEOUT_HUGE})
   endif()
 
-  message(STATUS "Found ${category} test graph: ${graph_name} has ${line_count} lines")
-    
+  # message(STATUS "Found ${category} test graph: ${graph_name} has ${line_count} lines")
+
   add_test(
     NAME "${graph_name}-heuristic"
     COMMAND $<TARGET_FILE:max-clique>
@@ -58,12 +65,11 @@ foreach(graph_file IN LISTS TEST_GRAPHS)
 	-r 1
 	-e
   )
-  
+
   set_tests_properties("${graph_name}-exact" PROPERTIES
 	LABELS "${category},exact"
 	TIMEOUT "${timeout}"
   )
-
   set_tests_properties("${graph_name}-heuristic" PROPERTIES
 	LABELS "${category},heuristic"
 	TIMEOUT "${timeout}"
@@ -72,5 +78,5 @@ foreach(graph_file IN LISTS TEST_GRAPHS)
   set_tests_properties("${graph_name}-hybrid" PROPERTIES
 	LABELS "${category},hybrid"
 	TIMEOUT "${timeout}"
-  )  
+  )
 endforeach()

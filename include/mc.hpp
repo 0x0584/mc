@@ -31,6 +31,23 @@
 
 namespace mc {
 class multithreaded {
+  /*struct branch {
+    branch(const enumerator &E,
+           const std::pmr::unordered_set<enumerator::key> &pruned)
+        : E(E), pruned(pruned) {}
+
+  protected:
+    std::size_t num_nodes = 0;
+    std::pmr::vector<enumerator::key> clique;
+
+    const enumerator &E;
+    const std::pmr::unordered_set<enumerator::key> &pruned;
+  };
+
+  struct branch_heuristic : branch {};
+
+  struct branch_exact : branch {};*/
+
 public:
   static inline const std::size_t maximum_bound = -1u;
 
@@ -55,23 +72,23 @@ private:
   //
   // hence, we can set the max clique few times and avoid unnecessary
   //  assignments of cliques from several threads, at least in most cases
-  std::uint32_t holder_thread_id = -1u;
+  enumerator::key branching_key = enumerator::null_key;
 
   // terminate the algorithm early if the depth matches the bound
   std::atomic_bool upper_bound_reached = false;
 
   void solution(flavour algo, std::size_t upper_bound);
 
-  bool enlarge_clique_size(std::uint32_t thread_id,
-                           std::size_t &max_clique_size, std::size_t depth);
+  bool enlarge_clique_size(enumerator::key key, std::size_t &max_clique_size,
+                           std::size_t depth);
 
-  void branch_exact(std::uint32_t thread_id, enumerator::key v,
+  void branch_exact(enumerator::key key, enumerator::key v,
                     enumerator::sorted_keys &sorted_neighs,
                     std::vector<enumerator::key> &clique,
                     std::size_t &max_clique_size, std::size_t upper_bound,
                     std::size_t &num_nodes, std::size_t depth = 1);
 
-  void branch_heuristic(std::uint32_t thread_id, enumerator::key v,
+  void branch_heuristic(enumerator::key key, enumerator::key v,
                         enumerator::sorted_keys &sorted_neighs,
                         std::vector<enumerator::key> &clique,
                         std::size_t &max_clique_size, std::size_t upper_bound,
@@ -81,10 +98,10 @@ public:
   static inline std::size_t no_upper_bound = -1u;
 
   explicit multithreaded(graph G) : E(G) {
-    logger::info("Number of available Threads", thread::num_threads);
+    logger::info("Number of available Threads", args::num_threads);
   }
 
-  ~multithreaded() { logger::info("~multithreaded()"); }
+  ~multithreaded() { logger::debug("~multithreaded()"); }
 
   std::vector<graph::vertex>
   solve(flavour algo = flavour::exact,

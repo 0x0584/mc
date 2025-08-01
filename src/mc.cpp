@@ -19,6 +19,7 @@
 
 #include <gperftools/profiler.h>
 
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <memory_resource>
@@ -73,7 +74,7 @@ std::vector<graph::vertex> multithreaded::solve(flavour algo,
   max_clique.clear();
   overall_size = 0;
   upper_bound_reached = false;
-  holder_thread_id = -1u;
+  branching_key = enumerator::null_key;
 
   return clique;
 }
@@ -96,15 +97,6 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   std::size_t old_max_clique_size = overall_size;
 
-  // the awaiting pool of threads has shared access to the availability vector,
-  // so that if multiple threads finished simultaneously they may flag
-  // termination at the same time
-  std::condition_variable_any thread_pool;
-  std::shared_mutex thread_mtx;
-  std::vector<std::thread> threads(thread::num_threads);
-  std::vector<bool> available(thread::num_threads, true);
-  holder_thread_id = -1u; // TODO: handle threads in their own context
-  //
   // when a vertex has no neighbours (they were pruned previously) or the
   // highest colour is less than the max clique size, then, we can terminate the
   // search since we had already sorted them in decreasing order of degeneracy
@@ -112,25 +104,19 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
-  std::vector<enumerator::key> keys(E.vertex_count());
-  std::iota(keys.begin(), keys.end(), 0);
+  enumerator::sorted_keys sorted_keys;
+  {
+    std::vector<enumerator::key> keys(E.vertex_count());
+    std::iota(keys.begin(), keys.end(), 0);
+    sorted_keys = E.greedy_colour_sort(std::move(keys));
+  }
   // sort vertices based on their colours using greedy colouring
   // FIXME: re-introduce this inside the loop
-  auto sorted_keys = E.greedy_colour_sort(std::move(keys));
   //
-  // once a vertex is selected, it is pruned after inducing its neighbours
-  const std::size_t pruned_buffer_size =
-      sizeof(std::unordered_set<enumerator::key>::node_type) * E.vertex_count();
-  auto pruned_buffer = std::make_unique<std::byte[]>(pruned_buffer_size);
-  std::pmr::monotonic_buffer_resource pruned_pool(pruned_buffer.get(),
-                                                  pruned_buffer_size);
-  std::pmr::unordered_set<enumerator::key> pruned(&pruned_pool);
-
+  std::pmr::unordered_set<enumerator::key> pruned;
   //
   // inducing the neighbours out of the remaining, in fact, must be sequential
-  std::mutex read_mtx;
-  std::condition_variable read_flag;
-  bool reading = false;
+  std::mutex pruned_mtx;
 
   // while branches run in-parallel, each might not visit all vertices
   // thus we define a branching as follows:
@@ -151,185 +137,130 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
   ProfilerStart("max-clique.prof");
 #endif
 
-  auto percent_begin = std::chrono::high_resolution_clock::now();
+  thread::pool branches(args::num_threads);
+
+  begin = std::chrono::high_resolution_clock::now();
+
+  std::barrier prune_barrier(2);
   while (not sorted_keys.empty() && not abort_search &&
          not upper_bound_reached) {
-    auto percent_end = std::chrono::high_resolution_clock::now();
-    const std::size_t percent = E.vertex_count() - sorted_keys.size();
+    auto percent_begin = std::chrono::high_resolution_clock::now();
+    auto percent = E.vertex_count() - sorted_keys.size();
 
-#ifdef LOG
-    logger::info("waiting...", logger::progress(percent, E.vertex_count()),
-                 "in", logger::time_diff(begin, percent_end, logger::bold));
-#else // minimal console logging
-    if (logger::duration(percent_begin, percent_end) >= 1.) {
-      logger::info(logger::progress(percent, E.vertex_count()), "in",
-                   logger::time_diff(begin, percent_end, logger::bold));
-    }
-#endif
-
-    percent_begin = percent_end;
-
-    {
-      // block for available threads
-      std::unique_lock thread_lock(thread_mtx);
-      thread_pool.wait(thread_lock, [&] {
-        return std::any_of(available.begin(), available.end(),
-                           [](bool th) { return th; });
+    branches.exec([this, &abort_search, &old_max_clique_size, &pruned, &algo,
+                   &upper_bound, &total_branches, &prune_barrier,
+                   key_colour =
+                       sorted_keys.pop()](std::uint16_t task_id) mutable {
+      bool arrived = false;
+      scope_dtor barrier([&arrived, &prune_barrier] {
+        if (not arrived) {
+          prune_barrier.arrive_and_wait();
+        }
       });
-    }
 
-    if (abort_search || upper_bound_reached) {
-      break; // search has terminated
-    }
-
-    std::size_t current_max_clique_size;
-    {
-      std::shared_lock clique_lock(mtx);
-      current_max_clique_size = overall_size; // stamp-sync the size
-    }
-
-    if (old_max_clique_size != current_max_clique_size) {
-      logger::info("Max Clique of", current_max_clique_size,
-                   "vertices was found");
-      old_max_clique_size = current_max_clique_size;
-    }
-
-    for (std::uint32_t thread_id = 0;
-         thread_id < threads.size() && not sorted_keys.empty() &&
-         not abort_search && not upper_bound_reached;
-         ++thread_id) {
-
-      if (not available[thread_id]) {
-        continue; // the current thread is still busy
+      if (upper_bound_reached || abort_search) {
+        return;
       }
 
-      // set the thread as busy
-      if (available[thread_id].flip(); threads[thread_id].joinable()) {
-        threads[thread_id].join();
+      std::size_t max_clique_size;
+      {
+        std::shared_lock clique_lock(mtx);
+        max_clique_size = overall_size;
       }
 
-      if (sorted_keys.highest_colour() <= current_max_clique_size) {
-#ifdef LOG
-        logger::print(E.key_to_vertex(sorted_keys.key_with_highest_colour()),
-                      "has insufficient colours. abort search!");
-#endif
+      if (old_max_clique_size != max_clique_size) {
+        old_max_clique_size = max_clique_size;
+        logger::debug("New Clique with", max_clique_size,
+                      "vertices was found!");
+      }
+
+      const auto &[key, colour] = key_colour;
+      auto v = E.key_to_vertex(key);
+
+      if (colour <= max_clique_size) {
+        logger::debug(v, "has no sufficient colours. abort search.");
         abort_search = true;
-        break;
+        return;
       }
 
-      enumerator::key v = sorted_keys.pop_key_with_highest_colour();
-      reading = true;
-      // FIXME refactor threading
-      threads[thread_id] = std::thread(
-          [&, this](std::uint32_t thread_id, enumerator::key v,
-                    std::size_t max_clique_size) {
-            // since the thread can return on several conditions, it is
-            // practical to use a scope destructor to ensure that threads are
-            // marked as available not matter the branch
-            scope_dtor set_thread_available(
-                [&available, &thread_id, &thread_mtx, &thread_pool] {
-                  {
-                    std::shared_lock thread_lock(thread_mtx);
-                    available[thread_id] = true;
-                  }
-                  thread_pool.notify_one();
-                });
+      auto neighs = E.neighbours(key, pruned);
+      pruned.emplace(key);
+      prune_barrier.arrive_and_wait();
+      arrived = true;
 
-            std::vector<enumerator::key> neighs = E.neighbours(v, pruned);
-            pruned.emplace(v);
+      if (neighs.empty()) {
+        logger::debug(v, "has no neighbours. abandon branching.");
+        return;
+      }
 
-            {
-              std::scoped_lock reading_lock(read_mtx);
-              reading = false;
-            }
-            read_flag.notify_one();
+      auto sorted_neighs = E.greedy_colour_sort(std::move(neighs));
+      if (sorted_neighs.highest_colour() < max_clique_size) {
+        abort_search = true;
+        logger::debug("Vertex", v, "has insufficient colours. abort search.");
+        return;
+      }
 
-            if (neighs.empty()) {
-#ifdef LOG
-              logger::print(E.key_to_vertex(v),
-                            "has no neighbours. abort search!");
-#endif
-              abort_search = true;
-              return;
-            }
+      logger::debug("Branching on vertex", v, "with", sorted_neighs.size(),
+                    "neighbours of", sorted_neighs.highest_colour(), "colours");
 
-            auto sorted_neighs = E.greedy_colour_sort(std::move(neighs));
-            if (sorted_neighs.highest_colour() < max_clique_size) {
-#ifdef LOG
-              logger::print(E.key_to_vertex(v),
-                            "has insufficient colours. abort search!");
-#endif
-              abort_search = true;
-              return;
-            }
+      auto begin = std::chrono::high_resolution_clock::now();
 
-#ifdef LOG
-            logger::print_thread(thread_id, "branching on", E.key_to_vertex(v),
-                                 "with", sorted_neighs.size(), "neighbours of",
-                                 sorted_neighs.highest_colour(), "colours");
-            auto begin = std::chrono::high_resolution_clock::now();
-#endif
+      std::size_t num_nodes = 0;
+      std::vector<enumerator::key> clique;
 
-            std::size_t num_nodes = 0;
-            std::vector<enumerator::key> clique;
-            if (algo == flavour::heuristic) {
-              branch_heuristic(thread_id, v, sorted_neighs, clique,
-                               max_clique_size, upper_bound, num_nodes);
-            } else {
-              branch_exact(thread_id, v, sorted_neighs, clique, max_clique_size,
-                           upper_bound, num_nodes);
-            }
+      if (algo == flavour::heuristic) {
+        branch_heuristic(key, key, sorted_neighs, clique, max_clique_size,
+                         upper_bound, num_nodes);
+      } else {
+        branch_exact(key, key, sorted_neighs, clique, max_clique_size,
+                     upper_bound, num_nodes);
+      }
 
-            if (std::scoped_lock clique_lock(mtx);
-                clique.size() > max_clique.size() &&
-                thread_id == holder_thread_id) {
-#ifdef LOG
-              std::ostringstream oss;
-              oss << "found clique for " << E.key_to_vertex(v) << " of "
-                  << clique.size() << " vertices { ";
-              for (enumerator::key u : clique) {
-                oss << E.key_to_vertex(u) << " ";
-              }
-              oss << "}";
-              logger::print_thread(thread_id, oss.str());
-#endif
-              assert(clique.size() == overall_size);
-              max_clique = std::move(clique);
-            }
+      // FIXME: use key instead of thread_id to check for branching clique
+      if (std::scoped_lock clique_lock(mtx);
+          clique.size() > max_clique.size() && key == branching_key) {
 
-            total_branches += num_nodes;
+        if constexpr (logger::current_level == logger::log_level::debug) {
+          std::ostringstream oss;
+          oss << "Found clique for " << v << " of " << clique.size()
+              << " vertices { ";
+          for (enumerator::key u : clique) {
+            oss << E.key_to_vertex(u) << " ";
+          }
+          oss << "}";
+          logger::debug(oss.str());
+        }
 
-#ifdef LOG
-            auto end = std::chrono::high_resolution_clock::now();
-            logger::print_thread(thread_id, "done with", E.key_to_vertex(v),
-                                 "after", num_nodes, "branches took",
-                                 logger::time_diff(begin, end, logger::bold),
-                                 "with", E.get_cache_hits(), "cache hits");
-#endif
-          },
-          thread_id, v, current_max_clique_size);
+        assert(clique.size() == overall_size);
+        max_clique = std::move(clique);
+      }
 
-      std::unique_lock read_lock(read_mtx);
-      read_flag.wait(read_lock, [&reading]() { return not reading; });
+      total_branches += num_nodes;
+
+      auto end = std::chrono::high_resolution_clock::now();
+      logger::debug("Done with vertex", v, "after", num_nodes, "branches took",
+                    logger::time_diff(begin, end, logger::bold), "with",
+                    E.get_cache_hits(), "cache hits");
+    });
+
+    prune_barrier.arrive_and_wait();
+
+    auto percent_end = std::chrono::high_resolution_clock::now();
+
+    if constexpr (logger::current_level == logger::log_level::debug) {
+      if (logger::duration(percent_begin, percent_end) >= 1.) {
+        logger::debug(logger::progress(percent, E.vertex_count()), "in",
+                      logger::time_diff(begin, percent_end, logger::bold));
+      }
     }
   }
 
-#ifdef LOG
-  logger::info("stopped making threads");
-#endif
+  branches.join();
 
-  for (std::thread &th : threads) {
-    if (th.joinable()) {
-      th.join();
-    }
-  }
   auto end = std::chrono::high_resolution_clock::now();
+
 #ifndef NDEBUG
   ProfilerStop();
-#endif
-
-#ifdef LOG
-  logger::info("all threads have joined");
 #endif
 
   logger::info(
@@ -339,7 +270,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
       logger::time_diff(begin, end, logger::ansi_colours | logger::bold));
 }
 
-bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
+bool multithreaded::enlarge_clique_size(enumerator::key key,
                                         std::size_t &max_clique_size,
                                         std::size_t depth) {
   bool found = false;
@@ -357,11 +288,11 @@ bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
         // holder of the current maximum clique
         if (overall_size = std::max(depth, overall_size);
             old_overall_size != overall_size) {
-          holder_thread_id = thread_id;
+          branching_key = key;
         }
       }
       clique_shared.lock();
-      found = holder_thread_id == thread_id;
+      found = branching_key == key;
 
 #ifdef LOG
       logger::print_thread(thread_id, "enlarged clique size to", overall_size);
@@ -373,7 +304,7 @@ bool multithreaded::enlarge_clique_size(std::uint32_t thread_id,
   return found;
 }
 
-void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
+void multithreaded::branch_exact(enumerator::key key, enumerator::key v,
                                  enumerator::sorted_keys &sorted_neighs,
                                  std::vector<enumerator::key> &clique,
                                  std::size_t &max_clique_size,
@@ -409,7 +340,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
     std::vector<enumerator::key> new_neighs =
         E.neighbourhood(u, sorted_neighs.keys());
     if (new_neighs.empty() || next_depth == upper_bound) {
-      if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
+      if (enlarge_clique_size(key, max_clique_size, next_depth)) {
         if (next_depth == upper_bound) {
           upper_bound_reached = true; // prevent additional recursions
         }
@@ -420,7 +351,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
     } else {
       auto new_sorted_neighs = E.greedy_colour_sort(std::move(new_neighs));
       if (next_depth + new_sorted_neighs.highest_colour() > max_clique_size) {
-        branch_exact(thread_id, u, new_sorted_neighs, clique, max_clique_size,
+        branch_exact(key, u, new_sorted_neighs, clique, max_clique_size,
                      upper_bound, num_nodes, next_depth);
       }
     }
@@ -435,7 +366,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
         // is guaranteed to have the correct value: which is exactly what we are
         // trying to achieve.  practically (as far as I had measured) locking
         // the mutex would x2 the runtime with not clear benefit
-        holder_thread_id == thread_id) {
+        branching_key == key) {
       clique.emplace_back(v);
     }
   }
@@ -447,7 +378,7 @@ void multithreaded::branch_exact(std::uint32_t thread_id, enumerator::key v,
   //                   "colours and depth", depth);
 }
 
-void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
+void multithreaded::branch_heuristic(enumerator::key key, enumerator::key v,
                                      enumerator::sorted_keys &sorted_neighs,
                                      std::vector<enumerator::key> &clique,
                                      std::size_t &max_clique_size,
@@ -475,7 +406,7 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
   std::vector<enumerator::key> new_neighs =
       E.neighbourhood(u, sorted_neighs.keys());
   if (new_neighs.empty() || next_depth == upper_bound) {
-    if (enlarge_clique_size(thread_id, max_clique_size, next_depth)) {
+    if (enlarge_clique_size(key, max_clique_size, next_depth)) {
       if (next_depth == upper_bound) {
         upper_bound_reached = true;
       }
@@ -486,12 +417,12 @@ void multithreaded::branch_heuristic(std::uint32_t thread_id, enumerator::key v,
   } else {
     auto new_sorted_neighs = E.greedy_colour_sort(std::move(new_neighs));
     if (next_depth + new_sorted_neighs.highest_colour() > max_clique_size) {
-      branch_heuristic(thread_id, u, new_sorted_neighs, clique, max_clique_size,
+      branch_heuristic(key, u, new_sorted_neighs, clique, max_clique_size,
                        upper_bound, num_nodes, next_depth);
     }
   }
 
-  if (prev_max_clique_size < max_clique_size && holder_thread_id == thread_id) {
+  if (prev_max_clique_size < max_clique_size && branching_key == key) {
     clique.emplace_back(v);
   }
 }

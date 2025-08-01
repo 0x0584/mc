@@ -43,6 +43,8 @@ struct enumerator {
   using key = unsigned;
   using colour = unsigned;
 
+  static inline const key null_key = -1u;
+
   // the keys are sorted in non-decreasing order relative to their colours
   struct sorted_keys { // FIXME: refactor this into a better interface
     friend enumerator;
@@ -64,6 +66,18 @@ struct enumerator {
       keys_colours.first.pop_back();
       keys_colours.second.pop_back();
       return k;
+    }
+
+    inline std::pair<key, colour> peek() {
+      return std::make_pair(keys_colours.first.back(),
+                            keys_colours.second.back());
+    }
+
+    inline std::pair<key, colour> pop() {
+      auto key_colour = peek();
+      keys_colours.first.pop_back();
+      keys_colours.second.pop_back();
+      return key_colour;
     }
 
     inline const std::vector<key> &keys() const { return keys_colours.first; }

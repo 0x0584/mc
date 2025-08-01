@@ -24,83 +24,16 @@
 #include <cstring>
 #include <getopt.h>
 
-#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 
-#include "core.hpp"
 #include "flavour.hpp"
+#include "logger.hpp"
 
 namespace mc {
 struct args {
-  static void parse(int argc, char *argv[]) {
-    for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
-      switch (ch) {
-      case 'r':
-        num_turns = std::max(1l, std::atol(optarg));
-        break;
-      case 'i':
-        stdin = false;
-        file = std::ifstream(filename = optarg);
-        break;
-      case 'd':
-        undirected = false;
-        break;
-      case 's':
-        expect_size = true;
-        size = static_cast<std::size_t>(std::atol(optarg));
-        logger::info("Expecting a Max Clique of size", size);
-        break;
-      case 'u':
-        upper_bound = static_cast<std::size_t>(std::atol(optarg));
-        logger::info("Expected Upper Bound for Max Clique of size",
-                     upper_bound);
-        break;
-      case 'l':
-        lower_bound = static_cast<std::size_t>(std::atol(optarg));
-        logger::info("Expected Lower Bound for Max Clique of size",
-                     lower_bound);
-        break;
-      case 'e':
-        if (exec_mode == flavour::heuristic) {
-          // just in case both hybrid and excat were specified, run as hybrid
-          exec_mode = flavour::exact;
-        }
-        break;
-      case 'y':
-        exec_mode = flavour::hybrid;
-        break;
-      case 'o':
-        draw = false;
-        break;
-      case 'h':
-      case ':':
-      case '?':
-      default:
-        std::cerr
-            << "Find the Max Clique of a graph using branch-and-bound\n\n"
-            << "  -r N run for N times\n"
-            << "  -i FILE take input from FILE instead of STDIN\n"
-            << "  -u N expect a at most a clique of size N\n"
-            << "  -l N expect at least a clique of size N\n"
-            << "  -e run the algorithm as EXACT (default HEURISTIC)\n"
-            << "  -y run the algorithm as HYBRID (HEURISTIC + EXACT)\n"
-            << "  -o output a Graphiz Dot file of the graph and the clique"
-            << "  -d use DIRECTED edges instead of the default UNDIRECTED\n"
-            << "\n";
-        exit(EXIT_FAILURE);
-      }
-    }
-
-    logger::info("Running", args::exec_mode);
-
-    if (stdin) {
-      logger::info("Reading from STDIN");
-    } else {
-      logger::info("Reading from", filename);
-    }
-  }
+  static void parse(int argc, char *argv[]);
 
   static inline std::istream &stream() { return stdin ? std::cin : file; }
   static inline std::size_t stream_size() {
@@ -114,6 +47,7 @@ struct args {
   static inline std::string filename;
   static inline bool draw = false;
 
+  static std::uint16_t num_threads;
   static inline flavour exec_mode = flavour::heuristic;
 };
 
@@ -134,7 +68,7 @@ struct input {
                  "vertices and", num_e, "edges");
   }
 
-  ~input() { logger::info("~input()"); }
+  ~input() { logger::debug("~input()"); }
 
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
@@ -171,51 +105,31 @@ struct feed {
   feed(feed &&feed) = delete;
   feed(const feed &feed) = delete;
 
-  explicit inline feed(input &in) : in(in), tail_remaining(remaining.begin()) {
-    std::memset(remaining.data(), 0x0, remaining.size());
+  explicit inline feed(input &in)
+      : in(in), tail_remaining(remaining.begin()),
+        _estimate_chunks(1 + args::stream_size() / CHUNK_SIZE),
+        _estimate_num_edges(2.15 * in.num_e / in.num_v),
+        _edges_per_chunk(1.50 * in.num_e / _estimate_chunks) {
+    std::memset(remaining.data(), 0x00, remaining.size());
   }
 
   ~feed() {
     if (tail_remaining != remaining.begin()) {
+      // FIXME: use either exceptions or logger::error
       logger::error("INVALID file: no NL at the end of the file");
     }
+    logger::debug("~feed()");
   }
 
   inline operator bool() { return reading(); }
-  inline std::size_t estimate_chunks() const {
-    return 1 + args::stream_size() / CHUNK_SIZE;
-  }
+
+  inline std::size_t estimate_chunks() const { return _estimate_chunks; }
+  inline std::size_t estimate_num_edges() const { return _estimate_num_edges; }
+  inline std::size_t edges_per_chunk() const { return _edges_per_chunk; }
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }
 
-  std::string read_chunk() {
-    buffer buff;
-    const buffer::difference_type size_remaining =
-        std::distance(remaining.begin(), tail_remaining);
-    std::move(remaining.begin(), tail_remaining, buff.data());
-
-    auto read = read_next(CHUNK_SIZE - size_remaining);
-    auto begin_read = read.first.begin();
-    const auto size_read = read.second;
-    std::move(begin_read, begin_read + size_read, buff.data() + size_remaining);
-
-    const buffer::iterator tail_buff =
-        buff.begin() + (size_remaining + size_read);
-    buffer::iterator delimiter = tail_buff;
-    while (delimiter != buff.begin() && *--delimiter != feed::deli)
-      ;
-    if (delimiter == buff.begin()) {
-      logger::error("FAILURE: chunk_size=", CHUNK_SIZE,
-                    " exceeded! recompile with a bigger size");
-    }
-
-    const std::size_t buffer_size =
-        static_cast<std::size_t>(std::distance(buff.begin(), delimiter++));
-    std::move(delimiter, tail_buff, remaining.data());
-    tail_remaining = remaining.begin() + std::distance(delimiter, tail_buff);
-
-    return std::string{std::move(buff.data()), buffer_size};
-  }
+  std::string read_chunk();
 
 private:
   inline bool reading() {
@@ -237,6 +151,10 @@ private:
   input &in;
   buffer remaining{};
   buffer::iterator tail_remaining;
+
+  const std::size_t _estimate_chunks;
+  const std::size_t _estimate_num_edges;
+  const std::size_t _edges_per_chunk;
 };
 } // namespace mc
 

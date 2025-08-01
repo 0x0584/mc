@@ -40,6 +40,7 @@ int main(int argc, char *argv[]) {
     std::pmr::monotonic_buffer_resource vertices_pool;
     std::pmr::monotonic_buffer_resource edges_pool;
     multithreaded algo(builder.build(vertices_pool, edges_pool));
+    // return 1;
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       if (args::num_turns != 1)
         logger::info("Turn", turn, "/", args::num_turns);
