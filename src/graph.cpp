@@ -112,11 +112,18 @@ graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
                 feed.estimate_num_edges());
 
   thread::pool pool(args::num_threads); // XXX switch to a thread pool
+  std::vector<std::vector<std::pair<graph::vertex, graph::vertex>>> local_edges(
+      args::num_threads);
+  for (auto &local : local_edges) {
+    local.reserve(feed.edges_per_chunk());
+  }
+
   auto begin = std::chrono::high_resolution_clock::now();
   do {
-    pool.exec([&, this, buff = feed.read_chunk()](std::uint16_t) mutable {
-      std::pmr::vector<std::pair<graph::vertex, graph::vertex>> local_edges;
-      local_edges.reserve(feed.edges_per_chunk());
+    pool.exec([buff = feed.read_chunk(), &local_edges, &G, &graph_mtx,
+               this](std::uint16_t task_id) mutable {
+      auto &local = local_edges[task_id];
+      local.clear();
       std::string::iterator it = buff.begin();
       int vertices_read = 2;
       for (graph::vertex u = graph::nil_vertex, v = graph::nil_vertex;
@@ -129,14 +136,12 @@ graph graph_builder::build(std::pmr::monotonic_buffer_resource &vertices_pool,
           logger::warn("found cycle for vertex", u);
           continue;
         }
-        local_edges.emplace_back(u, v);
+        local.emplace_back(u, v);
       }
       logger::debug("edges read:", local_edges.size());
-      {
-        std::unique_lock lock(graph_mtx);
-        for (auto [u, v] : local_edges) {
-          G.add_edge_undirected(u, v, feed.estimate_num_edges());
-        }
+      std::unique_lock lock(graph_mtx);
+      for (auto [u, v] : local) {
+        G.add_edge_undirected(u, v, feed.estimate_num_edges());
       }
     });
   } while (feed);

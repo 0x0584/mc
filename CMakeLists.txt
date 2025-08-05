@@ -31,11 +31,23 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")
 
 set(THREADS_PER_CORE "2" CACHE STRING "Number of threads per core")
 set(LOG_LEVEL "Info" CACHE STRING "LogLevel [Off|Debug|Info|Warn|Error]")
-
+if(NOT ENABLE_PROFILING)
+  set(ENABLE_PROFILING "OFF" CACHE STRING "Profiling")
+endif()
 target_compile_definitions(${PROJECT_NAME} PRIVATE
   THREADS_PER_CORE=${THREADS_PER_CORE}
   LOG_LEVEL=${LOG_LEVEL}
 )
+
+if(ENABLE_PROFILING STREQUAL "ON")
+  message(STATUS "Profiling is enabled")  
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+	ENABLE_PROFILING
+  )
+  target_link_libraries(${PROJECT_NAME} PRIVATE
+	profiler
+  )
+endif()
 
 set(LOCAL_INCLUDE_DIR "/opt/local/include")
 set(TBB_INCLUDE_DIR "/opt/local/libexec/tbb/include/tbb")
@@ -72,7 +84,6 @@ target_link_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
   tbb
   pthread
-  debug profiler
 )
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")

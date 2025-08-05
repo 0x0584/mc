@@ -304,7 +304,6 @@ inline constexpr const char *get_level_str(log_level level) {
       std::unique_lock queue_lock(queue_mtx);
       logger_cv.wait(queue_lock, [] {
         std::unique_lock print_lock(print_mtx);
-        std::cerr << std::flush;
         return stop_logger || not log_queue.empty();
       });
 
@@ -317,7 +316,7 @@ inline constexpr const char *get_level_str(log_level level) {
       queue_lock.unlock();
 
       std::unique_lock print_lock(print_mtx);
-      std::cerr << message << '\n';
+      std::cerr << message;
     }
   });
   return scope_dtor([]() {
@@ -341,18 +340,19 @@ template <typename Chrono> inline double duration(Chrono begin, Chrono end) {
 template <typename Chrono>
 inline std::string time_diff(Chrono begin, Chrono end,
                              int flags = ansi_colours) {
+  (void)flags;
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(3) << std::left;
-  if (flags & ansi_colours) {
-    oss << COL_GREEN;
-  }
-  if (flags & bold) {
-    oss << COL_BOLD;
-  }
+  // if (flags & ansi_colours) {
+  //   oss << COL_GREEN;
+  // }
+  // if (flags & bold) {
+  //   oss << COL_BOLD;
+  // }
   oss << duration(begin, end) << "s";
-  if (flags & ansi_colours || flags & bold) {
-    oss << COL_RESET;
-  }
+  // if (flags & ansi_colours || flags & bold) {
+  //   oss << COL_RESET;
+  // }
   return oss.str();
 }
 
@@ -380,7 +380,8 @@ template <log_level Level, typename... Args>
 static inline void _log_impl(const char *colour_code, Args &&...log_args) {
   if constexpr (Level <= current_level) {
     auto now = std::chrono::system_clock::now();
-    auto log_message = [now, colour_code](auto &&...args) {
+    auto log_message = [now, colour_code,
+                        thread_id = __get_thread_id()](auto &&...args) {
       auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     now.time_since_epoch()) %
                 1000;
@@ -392,12 +393,12 @@ static inline void _log_impl(const char *colour_code, Args &&...log_args) {
       oss << colour_code;
       oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S") << '.'
           << std::setfill('0') << std::setw(3) << ms.count() << " ["
-          << std::setfill('0') << std::setw(3) << __get_thread_id() << "] "
+          << std::setfill('0') << std::setw(3) << thread_id << "] "
           << get_level_str(Level) << " ";
 
       ((oss << std::forward<decltype(args)>(args) << " "), ...);
 
-      oss << COL_RESET;
+      oss << COL_RESET << '\n';
       return oss.str();
     };
 

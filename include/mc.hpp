@@ -26,6 +26,7 @@
 
 // #define NDEBUG
 
+#include "cache.hpp"
 #include "enumerator.hpp"
 #include "thread.hpp"
 
@@ -86,13 +87,19 @@ private:
                     enumerator::sorted_keys &sorted_neighs,
                     std::vector<enumerator::key> &clique,
                     std::size_t &max_clique_size, std::size_t upper_bound,
-                    std::size_t &num_nodes, std::size_t depth = 1);
+                    std::size_t &num_nodes,
+                    lru_cache<std::vector<enumerator::key>,
+                              std::vector<enumerator::colour>> &cache,
+                    std::size_t &cache_hits, std::size_t depth = 1);
 
   void branch_heuristic(enumerator::key key, enumerator::key v,
                         enumerator::sorted_keys &sorted_neighs,
                         std::vector<enumerator::key> &clique,
                         std::size_t &max_clique_size, std::size_t upper_bound,
-                        std::size_t &num_nodes, std::size_t depth = 1);
+                        std::size_t &num_nodes,
+                        lru_cache<std::vector<enumerator::key>,
+                                  std::vector<enumerator::colour>> &cache,
+                        std::size_t &cache_hits, std::size_t depth = 1);
 
 public:
   static inline std::size_t no_upper_bound = -1u;

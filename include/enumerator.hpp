@@ -25,6 +25,7 @@
 #include <shared_mutex>
 
 #include "cache.hpp"
+#include "core.hpp"
 #include "graph.hpp"
 
 namespace mc {
@@ -45,62 +46,11 @@ struct enumerator {
 
   static inline const key null_key = -1u;
 
-  // the keys are sorted in non-decreasing order relative to their colours
-  struct sorted_keys { // FIXME: refactor this into a better interface
-    friend enumerator;
-
-    sorted_keys() = default;
-
-    explicit inline sorted_keys(
-        std::pair<std::vector<key>, std::vector<colour>> sorted)
-        : keys_colours(std::move(sorted)) {}
-
-    inline colour highest_colour() const { return keys_colours.second.back(); }
-
-    inline key key_with_highest_colour() const {
-      return keys_colours.first.back();
-    }
-
-    inline key pop_key_with_highest_colour() {
-      key k = keys_colours.first.back();
-      keys_colours.first.pop_back();
-      keys_colours.second.pop_back();
-      return k;
-    }
-
-    inline std::pair<key, colour> peek() {
-      return std::make_pair(keys_colours.first.back(),
-                            keys_colours.second.back());
-    }
-
-    inline std::pair<key, colour> pop() {
-      auto key_colour = peek();
-      keys_colours.first.pop_back();
-      keys_colours.second.pop_back();
-      return key_colour;
-    }
-
-    inline const std::vector<key> &keys() const { return keys_colours.first; }
-
-    inline const std::vector<colour> &colours() const {
-      return keys_colours.second;
-    }
-
-    inline std::size_t size() const { return keys_colours.first.size(); }
-
-    inline bool empty() const { return keys_colours.first.empty(); }
-
-  private:
-    std::pair<std::vector<key>, std::vector<colour>> keys_colours;
-  };
+  class sorted_keys;
 
   explicit enumerator(graph &G);
 
   inline std::size_t vertex_count() const { return V.size(); }
-
-  inline std::size_t get_cache_hits() { return cache_hits; }
-
-  inline void reset_cache_hits() { cache_hits = 0; }
 
   inline graph::vertex key_to_vertex(std::size_t index) const {
     assert(index < vertex_count());
@@ -119,12 +69,12 @@ struct enumerator {
   }
 
   inline std::vector<key>
-  neighbours(key v, std::pmr::unordered_set<key> &pruned) const {
+  neighbours(key v, std::pmr::unordered_set<key> pruned) const {
     assert(v < vertex_count());
     std::vector<key> neighs;
     neighs.reserve(A.at(v).size());
     std::copy_if(A.at(v).begin(), A.at(v).end(), std::back_inserter(neighs),
-                 [&pruned](key u) { return not pruned.count(u); });
+                 [&pruned](key u) { return not pruned.contains(u); });
     return neighs;
   }
 
@@ -144,22 +94,182 @@ struct enumerator {
   void draw(const std::vector<graph::vertex> &clq) const;
 
   sorted_keys greedy_colour_sort(std::vector<key> &&vertices) const;
+  sorted_keys greedy_colour_sort(
+      std::vector<key> &&vertices,
+      lru_cache<std::vector<enumerator::key>, std::vector<enumerator::colour>>
+          &cache,
+      std::size_t &cache_hits) const;
 
   bool is_clique(const std::vector<key> &clique) const;
 
 private:
-  void cache_hit_progress() const;
-
-  mutable std::shared_mutex cache_mtx;
-  mutable lru_cache<std::vector<key>, std::vector<colour>> cache;
-  mutable std::atomic_size_t cache_hits{0};
-
   adjacency_vector V; // Enumertaed vertices
 
   // Adjacency List for fast neighbourhood deduction
   std::vector<std::vector<key>> A;
   // Adjacency Matrix for fast edge probing
   std::vector<std::vector<bool>> B;
+};
+
+// the keys are sorted in non-decreasing order relative to their colours
+class enumerator::sorted_keys { // FIXME: refactor this into a better interface
+  std::pair<std::vector<key>, std::vector<colour>> keys_colours;
+
+public:
+  friend enumerator;
+
+  sorted_keys() = default;
+
+  explicit inline sorted_keys(
+      std::pair<std::vector<key>, std::vector<colour>> sorted)
+      : keys_colours(std::move(sorted)) {}
+
+  inline colour highest_colour() const { return keys_colours.second.back(); }
+
+  inline key key_with_highest_colour() const {
+    return keys_colours.first.back();
+  }
+
+  inline key pop_key_with_highest_colour() {
+    key k = keys_colours.first.back();
+    keys_colours.first.pop_back();
+    keys_colours.second.pop_back();
+    return k;
+  }
+
+  inline std::pair<key, colour> peek() {
+    return std::make_pair(keys_colours.first.back(),
+                          keys_colours.second.back());
+  }
+
+  inline std::pair<key, colour> pop() {
+    auto key_colour = peek();
+    keys_colours.first.pop_back();
+    keys_colours.second.pop_back();
+    return key_colour;
+  }
+
+  inline const std::vector<key> &keys() const { return keys_colours.first; }
+
+  inline const std::vector<colour> &colours() const {
+    return keys_colours.second;
+  }
+
+  inline std::vector<key> &keys() { return keys_colours.first; }
+
+  inline std::vector<colour> &colours() { return keys_colours.second; }
+
+  inline std::size_t size() const { return keys_colours.first.size(); }
+
+  inline bool empty() const { return keys_colours.first.empty(); }
+
+  struct iterator {
+
+    using iterator_category = std::bidirectional_iterator_tag;
+    using difference_type = std::ptrdiff_t;
+    using value_type = std::pair<key, colour>;
+
+    inline iterator(sorted_keys *parent, std::size_t index)
+        : m_parent(parent), m_index(index) {}
+
+    [[nodiscard]] inline value_type operator*() const {
+      return {m_parent->keys_colours.first[m_index],
+              m_parent->keys_colours.second[m_index]};
+    }
+
+    inline iterator &operator++() {
+      ++m_index;
+      return *this;
+    }
+
+    [[nodiscard]] inline iterator operator++(int) {
+      iterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    inline iterator &operator--() {
+      --m_index;
+      return *this;
+    }
+
+    [[nodiscard]] inline iterator operator--(int) {
+      iterator tmp = *this;
+      --(*this);
+      return tmp;
+    }
+
+    inline difference_type operator-(const iterator &other) const {
+      return static_cast<difference_type>(m_index) -
+             static_cast<difference_type>(other.m_index);
+    }
+
+    inline bool operator==(const iterator &other) const {
+      return m_index == other.m_index;
+    }
+
+    inline bool operator!=(const iterator &other) const {
+      return not(*this == other);
+    }
+
+  private:
+    sorted_keys *m_parent;
+    std::size_t m_index;
+
+    friend class sorted_keys;
+  };
+
+  struct key_iterator {
+    using iterator_category = std::bidirectional_iterator_tag;
+    using difference_type = std::ptrdiff_t;
+    using value_type = key;
+
+    inline key_iterator(iterator it) : it(it) {}
+
+    [[nodiscard]] inline value_type operator*() const { return (*it).first; }
+
+    inline key_iterator &operator++() {
+      ++it;
+      return *this;
+    }
+
+    [[nodiscard]] inline key_iterator operator++(int) {
+      key_iterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    inline key_iterator &operator--() {
+      --it;
+      return *this;
+    }
+
+    [[nodiscard]] inline key_iterator operator--(int) {
+      key_iterator tmp = *this;
+      --(*this);
+      return tmp;
+    }
+
+    inline difference_type operator-(const key_iterator &other) const {
+      return it - other.it;
+    }
+
+    inline bool operator==(const key_iterator &other) const {
+      return it == other.it;
+    }
+
+    inline bool operator!=(const key_iterator &other) const {
+      return not(*this == other);
+    }
+
+  private:
+    iterator it;
+
+    friend class sorted_keys;
+  };
+
+  iterator begin() { return iterator(this, 0); }
+  iterator end() { return iterator(this, size()); }
 };
 } // namespace mc
 
