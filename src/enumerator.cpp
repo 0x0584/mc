@@ -17,9 +17,15 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
 // USA.
 
+#include <future>
+#include <numeric>
+#include <set>
+#include <shared_mutex>
+
 #include "enumerator.hpp"
 
 namespace mc {
+
 void enumerator::print() const {
   std::ostringstream oss;
   oss << "Enumerated Vertices\n";
@@ -31,9 +37,11 @@ void enumerator::print() const {
     oss << "}\n";
   }
   oss << "\n";
-  log::print(oss.str());
+  logger::print(oss.str());
 }
-void enumerator::draw(const std::vector<graph::vertex> &clq) const {
+
+void enumerator::draw(
+    const std::vector<graph::vertex> &clq) const { // FIXME: optimise this
   std::set<graph::vertex> clique(clq.begin(), clq.end());
   std::ofstream file((args::stdin ? "out" : args::filename) + ".dot");
   std::set<std::set<graph::vertex>> edges;
@@ -82,25 +90,19 @@ void enumerator::draw(const std::vector<graph::vertex> &clq) const {
   file.close();
 }
 
-enumerator::enumerator(graph G) {
+enumerator::enumerator(
+    graph &G) { // TODO: merge enumeration with graph building
   const std::size_t vertex_count = G.adjacency().size();
 
   auto begin = std::chrono::high_resolution_clock::now();
 
   // compute the neighbourhood degrees of all vertices for which they shall be
   // sorted based on their degeneracy
-  const std::size_t neighs_degree_type_size =
-      sizeof(std::unordered_map<graph::vertex, std::size_t>::node_type);
-  const std::size_t neighs_degree_buffer_size =
-      neighs_degree_type_size * vertex_count;
-  auto neighs_degree_buffer =
-      std::make_unique<std::byte[]>(neighs_degree_buffer_size);
-  std::pmr::monotonic_buffer_resource neighs_degree_pool(
-      neighs_degree_buffer.get(), neighs_degree_buffer_size);
-  std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree(
-      &neighs_degree_pool);
+
+  std::pmr::unordered_map<graph::vertex, std::size_t> neighs_degree;
+  neighs_degree.reserve(vertex_count);
   std::for_each(
-      std::execution::par_unseq, G.A.cbegin(), G.A.cend(),
+      G.A.cbegin(), G.A.cend(),
       [&neighs_degree, &G](const graph::adjacency_map::value_type &e) {
         neighs_degree[e.first] =
             std::accumulate(e.second.cbegin(), e.second.cend(), 0ul,
@@ -109,16 +111,18 @@ enumerator::enumerator(graph G) {
                             });
       });
 
+  logger::debug("Computed neighbourhood degrees");
+
   // switch the vertex container from std::unordered_map to std::vector
   V.resize(vertex_count);
-  std::transform(std::execution::par_unseq, G.A.begin(), G.A.end(), V.begin(),
+  std::transform(G.A.begin(), G.A.end(), V.begin(),
                  [](graph::adjacency_map::value_type &e) {
                    return std::make_pair(e.first, std::move(e.second));
                  });
 
   // sort vertices based on the degree of their adjacency as it was proven
   // that it makes colouring vertices optimal (as close to brute-forced)
-  std::sort(std::execution::par_unseq, V.begin(), V.end(),
+  std::sort(V.begin(), V.end(),
             [&](const adjacency_vector::value_type &v,
                 const adjacency_vector::value_type &u) {
               return (u.second.size() < v.second.size() ||
@@ -126,17 +130,18 @@ enumerator::enumerator(graph G) {
                        neighs_degree.at(u.first) < neighs_degree.at(v.first)));
             });
 
+  logger::debug("Sorted neighbourhood degrees");
+
   // allocate containers and reverse mapping between vertices and keys to
   // enumerate neighbours based on the order of vertices
 
-  std::pmr::monotonic_buffer_resource mapping_pool(neighs_degree_buffer.get(),
-                                                   neighs_degree_buffer_size);
-  std::pmr::unordered_map<graph::vertex, key> mapping(&mapping_pool);
+  std::pmr::unordered_map<graph::vertex, key> mapping;
+  mapping.reserve(vertex_count);
 
   B.resize(vertex_count);
-  std::for_each(
-      std::execution::par_unseq, B.begin(), B.end(),
-      [vertex_count](std::vector<bool> &mtx) { mtx.resize(vertex_count); });
+  std::for_each(B.begin(), B.end(), [vertex_count](std::vector<bool> &mtx) {
+    mtx.resize(vertex_count);
+  });
   A.resize(vertex_count);
   for (key v = 0; v < vertex_count; ++v) {
     const adjacency_vector::value_type &v_pair =
@@ -150,39 +155,62 @@ enumerator::enumerator(graph G) {
     const graph::neighbours_set &neighs = V[v].second;
     std::vector<bool> &v_mtx = B[v];
     // induce the indices of neighbours based on the mapping order
-    std::transform(std::execution::par_unseq, neighs.begin(), neighs.end(),
-                   A[v].begin(), [&v_mtx, &mapping](graph::vertex u) {
+    std::transform(neighs.begin(), neighs.end(), A[v].begin(),
+                   [&v_mtx, &mapping](graph::vertex u) {
                      key u_key = mapping.at(u);
                      v_mtx[u_key] = true;
                      return u_key;
                    });
     // then sort them too based on their induced indices for optimal colouring
-    std::sort(std::execution::par_unseq, A[v].begin(), A[v].end());
+    std::sort(A[v].begin(), A[v].end());
   }
 
   auto end = std::chrono::high_resolution_clock::now();
-  log::info("Vertices were enumerated in",
-            log::time_diff(begin, end, log::bold));
+  logger::info("Vertices were enumerated in",
+               logger::time_diff(begin, end, logger::bold));
 }
 
-std::vector<enumerator::colour>
-enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
-  assert(not neighs.empty());
+enumerator::sorted_keys enumerator::greedy_colour_sort(
+    std::vector<key> &&vertices,
+    lru_cache<std::vector<enumerator::key>, std::vector<enumerator::colour>>
+        &cache,
+    std::size_t &cache_hits) const {
+  static thread_local size_t cache_hits_mod = 10'000;
+  if (auto precomputed = cache.get(vertices); precomputed.has_value()) {
+    cache_hits++;
+    if (cache_hits % cache_hits_mod == 0) {
+      cache_hits_mod += .5 * cache_hits_mod;
+      logger::warn("current cache hits", cache_hits);
+    }
+    return sorted_keys(precomputed.value());
+  } else {
+    auto result = greedy_colour_sort(std::move(vertices));
+    return sorted_keys(cache.set(result.keys(), result.colours()));
+  }
+}
+
+// TODO use dynamic colouring instead
+enumerator::sorted_keys
+enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
+  assert(not vertices.empty());
+
+  std::vector<colour> colours;
 
   // dividing vertices into colour classes based on their order of adjacency
   // appearance, then rearrange them based on colour priority
   //
-  std::vector<std::vector<key>> col_class(neighs.size());
+  std::vector<std::vector<key>> col_class(vertices.size());
   //
-  // since at most there will be memory allocations as many vertices, it is fine
-  // to not reserve memory beforehand (as far as I had tested!)
-  for (key v : neighs) {
+  // since at most there will be memory allocations as many vertices, it is
+  // fine to not reserve memory beforehand (as far as I had tested!)
+  for (key v : vertices) {
     const std::vector<bool> &v_mtx = B.at(v);
     colour col = 0;
     //
     // since also, colour sorting is used to prune unnecessary branching when
     // seeking exactitude, thus it will practically decrease performance if
-    // checking adjacent colours ran in parallel (again, as far as I had tested)
+    // checking adjacent colours ran in parallel (again, as far as I had
+    // tested)
     //
     // although, since using an adjacency matrix is optimal for probing, this
     // would be far less overhead expense that justifies the memory footprint
@@ -194,17 +222,16 @@ enumerator::greedy_colour_sort(std::vector<key> &neighs) const {
   }
 
   // sort the vertices in-place (overriding the incoming std::vector)
-  std::vector<colour> colours;
-  colours.reserve(neighs.size());
-  neighs.clear(); // clearing up for in-place sorting (after reserving memory)
+  colours.reserve(vertices.size());
+  vertices.clear(); // clearing up for in-place sorting (after reserving memory)
   for (colour col = 0; col < col_class.size(); ++col) {
     std::fill_n(std::back_inserter(colours), col_class[col].size(), col + 1);
     // moving/appending the vertices is cheaper than std::copy_n
     std::move(col_class[col].begin(), col_class[col].end(),
-              std::back_inserter(neighs));
+              std::back_inserter(vertices));
   }
 
-  return colours;
+  return sorted_keys(std::make_pair(vertices, colours));
 }
 
 bool enumerator::is_clique(const std::vector<key> &clique) const {
