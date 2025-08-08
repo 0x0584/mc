@@ -35,7 +35,14 @@ namespace mc {
 struct args {
   static void parse(int argc, char *argv[]);
 
-  static inline std::istream &stream() { return stdin ? std::cin : file; }
+  static inline std::istream &stream() {
+    try {
+      return stdin ? std::cin : file;
+    } catch (std::runtime_error e) {
+      std::cerr << "cannot open stream!\n";
+      throw e;
+    }
+  }
   static inline std::size_t stream_size() {
     return stdin ? 1 : std::filesystem::file_size(filename);
   }

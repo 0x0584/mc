@@ -23,7 +23,7 @@ add_custom_command(
 
 add_subdirectory(src)
 
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O1")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O2")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -Os")
@@ -40,7 +40,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 if(ENABLE_PROFILING STREQUAL "ON")
-  message(STATUS "Profiling is enabled")  
+  message(STATUS "Profiling is enabled")
   target_compile_definitions(${PROJECT_NAME} PRIVATE
 	ENABLE_PROFILING
   )

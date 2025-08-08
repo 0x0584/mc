@@ -32,6 +32,19 @@
 using namespace mc;
 
 int main(int argc, char *argv[]) {
+  std::set_terminate([] {
+    try {
+      std::rethrow_exception(std::current_exception());
+    } catch (const std::runtime_error &e) {
+      logger::error(e.what());
+    } catch (const std::exception &e) {
+      logger::error(e.what());
+    } catch (...) {
+      logger::error("Uncaught unknown exception!");
+    }
+    std::abort();
+  });
+
   args::parse(argc, argv);
 
   try {
@@ -45,10 +58,11 @@ int main(int argc, char *argv[]) {
       if (args::num_turns != 1)
         logger::info("Turn", turn, "/", args::num_turns);
       auto clique = algo.solve(args::exec_mode);
-      auto m = std::set<graph::vertex>(clique.cbegin(), clique.cend());
+      std::vector<graph::vertex> sorted_clique(clique.cbegin(), clique.cend());
+      std::sort(sorted_clique.begin(), sorted_clique.end());
       std::ostringstream oss;
-      oss << "Max Clique has " << m.size() << " vertices { ";
-      for (graph::vertex e : m) {
+      oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
+      for (graph::vertex e : sorted_clique) {
         oss << e << " ";
       }
       oss << "}";
@@ -58,7 +72,8 @@ int main(int argc, char *argv[]) {
       }
     }
   } catch (const std::exception &e) {
-    logger::info(e.what());
+    std::unique_lock print_lock(logger::print_mtx);
+    std::cerr << "\n\n" << e.what() << '\n';
     return EXIT_FAILURE;
   }
 

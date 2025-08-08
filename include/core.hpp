@@ -46,6 +46,7 @@
 #define BG_WHITE "\x1b[47m"
 #define BG_DEFAULT_BG "\x1b[49m"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -54,64 +55,205 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <list>
 #include <mutex>
 #include <ostream>
 #include <queue>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
-namespace {
-std::atomic_uint16_t __thread_id_count = 0;
-thread_local bool __thread_id_assigned = false;
-thread_local std::uint16_t __thread_id = 0;
-} // namespace
+#include <cxxabi.h>
+#include <execinfo.h>
 
-inline std::uint16_t __get_thread_id() {
-  if (not __thread_id_assigned) {
-    __thread_id = __thread_id_count.fetch_add(1, std::memory_order_relaxed);
-    __thread_id_assigned = true;
-  }
-  return __thread_id;
-}
+std::uint16_t __get_thread_id();
 
 // since the thread can return on several conditions, it is
 // practical to use a scope destructor to ensure that threads are
 // marked as available not matter the branch
-template <typename Callable> struct scope_dtor {
+struct scope_dtor {
   scope_dtor(const scope_dtor &) = delete;
   scope_dtor(scope_dtor &&) = delete;
 
-  inline explicit scope_dtor(Callable &&fn)
-      : callback(std::forward<Callable>(fn)) {}
+  inline explicit scope_dtor(std::function<void()> &&fn)
+      : callback(std::move(fn)) {}
   inline ~scope_dtor() { callback(); }
 
   scope_dtor &operator=(const scope_dtor &) = delete;
   scope_dtor &operator=(scope_dtor &&) = delete;
 
 private:
-  Callable callback;
+  std::function<void()> callback;
 };
 
-namespace logger {
-enum class log_level : unsigned {
-  off = 0,
-  error,
-  warn,
-  info,
-  debug
+struct logger {
+  enum class log_level : unsigned {
+    off = 0,
+    error,
+    warn,
+    info,
+    debug
 
 #ifndef LOG_LEVEL
 #define LOG_LEVEL info
 #endif
-};
+  };
 
-template <typename... Args> inline void debug(Args &&...args);
-template <typename... Args> inline void info(Args &&...args);
-template <typename... Args> inline void warn(Args &&...args);
-template <typename... Args> inline void error(Args &&...args);
-template <typename... Args> inline void print(Args &&...args);
-template <typename... Args> inline void printv(Args &&...args);
+  struct log_entry;
+
+  static inline std::mutex print_mtx;
+  static inline std::size_t print_log_id = 1;
+  static inline std::pmr::list<log_entry> log_queue;
+  static inline std::mutex queue_mtx;
+  static inline std::condition_variable logger_cv;
+  static inline std::thread logger_thread;
+  static inline bool stop_logger = false;
+
+  enum flags { none = 0x0, bold = 0b0001, ansi_colours = 0b0010 };
+
+  static inline constexpr log_level current_level = log_level::LOG_LEVEL;
+
+  static inline constexpr const char *get_level_str(log_level level) {
+    switch (level) {
+    case log_level::debug:
+      return "DEBUG";
+    case log_level::info:
+      return "INFO ";
+    case log_level::warn:
+      return "WARN ";
+    case log_level::error:
+      return "ERROR";
+    default:
+      throw std::logic_error("unknown log_level!");
+    }
+  }
+
+  template <typename Chrono>
+  static inline double duration(Chrono begin, Chrono end) {
+    return std::chrono::duration<double>(end - begin).count();
+  }
+
+  template <typename Chrono>
+  static inline std::string time_diff(Chrono begin, Chrono end,
+                                      int flags = ansi_colours) {
+    (void)flags;
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3) << std::left;
+    oss << duration(begin, end) << "s";
+    return oss.str();
+  }
+
+  static inline std::string progress(std::size_t index, std::size_t size) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2) << std::left
+        << ((double(index + 1) * 100 / size)) << "%";
+    return oss.str();
+  }
+
+  static std::string stacktrace() {
+    const int max_frames = 128;
+    std::vector<void *> callstack(max_frames);
+    int frames = backtrace(callstack.data(), max_frames);
+    char **symbols = backtrace_symbols(callstack.data(), frames);
+
+    std::ostringstream oss;
+    if (symbols) {
+      for (int i = 0; i < frames; ++i) {
+        char *demangled_name = nullptr;
+        size_t len = 0;
+        int status;
+        char *mangled_name = symbols[i];
+
+        demangled_name =
+            abi::__cxa_demangle(mangled_name, demangled_name, &len, &status);
+
+        if (status == 0 && demangled_name) {
+          oss << demangled_name << '\n';
+          free(demangled_name);
+        } else {
+          oss << symbols[i] << '\n';
+        }
+      }
+      free(symbols);
+    }
+    return oss.str();
+  }
+
+  template <log_level Level, typename... Args>
+  static inline void _log_impl(const char *colour_code, Args &&...log_args) {
+    if constexpr (Level <= current_level) {
+      auto now = std::chrono::system_clock::now();
+      auto log_message = [now, colour_code, thread_id = __get_thread_id()](
+                             auto &&...args) mutable {
+        std::ostringstream oss;
+        oss << colour_code;
+        oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id
+            << "] " << get_level_str(Level) << " ";
+        ((oss << std::forward<decltype(args)>(args) << " "), ...);
+        oss << COL_RESET << '\n';
+
+        if constexpr (Level == log_level::error) {
+          oss << '\n' << stacktrace() << '\n';
+        }
+
+        return oss.str();
+      };
+      std::scoped_lock lock(queue_mtx);
+      log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
+                                             std::forward<Args>(log_args)...));
+    }
+  }
+
+  [[nodiscard]] static scope_dtor setup_logger();
+
+  template <typename... Args> static void debug(Args &&...args) {
+    _log_impl<log_level::debug>(COL_CYAN, std::forward<Args>(args)...);
+  }
+
+  template <typename... Args> static void info(Args &&...args) {
+    _log_impl<log_level::info>(COL_RESET, std::forward<Args>(args)...);
+  }
+
+  template <typename... Args> static void warn(Args &&...args) {
+    _log_impl<log_level::warn>(COL_YELLOW, std::forward<Args>(args)...);
+  }
+
+  template <typename... Args> static void error(Args &&...args) {
+    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...);
+    std::exit(EXIT_FAILURE);
+  }
+
+  template <typename... Args> static void print(Args &&...log_args) {
+    auto now = std::chrono::system_clock::now();
+    auto log_message = [](auto &&...args) {
+      std::ostringstream oss;
+      ((oss << std::forward<decltype(args)>(args) << " "), ...);
+      oss << '\n';
+      return oss.str();
+    };
+    std::scoped_lock lock(queue_mtx);
+    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
+                                           std::forward<Args>(log_args)...));
+    // logger_cv.notify_one();
+  }
+
+  template <typename... Args> static void printv(Args &&...log_args) {
+    auto now = std::chrono::system_clock::now();
+    auto log_message = [](auto &&...args) {
+      std::ostringstream oss;
+      ((oss << std::forward<decltype(args)>(args)), ...);
+      oss << '\n';
+      return oss.str();
+    };
+    std::scoped_lock lock(queue_mtx);
+    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
+                                           std::forward<Args>(log_args)...));
+    // logger_cv.notify_one();
+  }
+
+  static inline const auto logger_destoy = logger::setup_logger();
+}; // namespace logger
 
 #ifdef assert
 #undef assert
@@ -128,18 +270,9 @@ template <typename... Args> inline void printv(Args &&...args);
                                __FILE__ ":" TOSTRING(__LINE__))))
 #endif
 
-template <log_level level = log_level::info, typename... Args>
-inline void print_thread(std::uint16_t thread_id, const char *colour_code,
-                         Args &&...args);
-} // namespace logger
-
 namespace thread {
-#ifndef THREADS_PER_CORE
-#define THREADS_PER_CORE 2
-#endif
-constexpr std::uint16_t threads_per_core = THREADS_PER_CORE;
-const std::uint16_t num_available_threads =
-    std::thread::hardware_concurrency() * threads_per_core;
+extern const std::uint16_t threads_per_core;
+extern const std::uint16_t num_available_threads;
 
 struct pool {
   using Task = std::function<void(std::uint16_t)>;
@@ -226,8 +359,7 @@ private:
 };
 } // namespace thread
 
-namespace logger {
-struct log_entry {
+struct logger::log_entry {
   using time_point = std::chrono::time_point<std::chrono::system_clock>;
 
   friend std::less<log_entry>;
@@ -235,229 +367,58 @@ struct log_entry {
   friend std::equal_to<log_entry>;
 
   log_entry() = default;
-  log_entry(time_point stamp, std::future<std::string> msg)
-      : stamp(stamp), msg(std::move(msg)) {}
 
+  log_entry(const log_entry &) = delete;
+  log_entry(log_entry &&) = default;
+
+  log_entry &operator=(const log_entry &) = delete;
+  log_entry &operator=(log_entry &&) = default;
+
+  log_entry(time_point stamp, std::future<std::string> msg)
+      : stamp(stamp), msg(std::move(msg)) {
+    log_id = ++global_log_id;
+  }
+
+  std::size_t id() const { return log_id; }
   std::string message() const { return msg.get(); }
   const time_point &timestamp() const { return stamp; }
 
 private:
+  static inline std::atomic_size_t global_log_id = 0;
+
+  std::size_t log_id; // XXX: add id_to_print
   time_point stamp;
   mutable std::future<std::string> msg;
 };
-} // namespace logger
 
 namespace std {
 template <> struct less<logger::log_entry> {
   bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.stamp < rhs.stamp;
+    return lhs.log_id < rhs.log_id;
   }
 };
 
 template <> struct greater<logger::log_entry> {
   bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.stamp > rhs.stamp;
+    return lhs.log_id > rhs.log_id;
   }
 };
 
 template <> struct equal_to<logger::log_entry> {
   bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.stamp == rhs.stamp;
+    return lhs.log_id == rhs.log_id;
   }
 };
+
+template <> struct hash<logger::log_entry::time_point> {
+  size_t operator()(const logger::log_entry::time_point &tp) const {
+    return std::hash<logger::log_entry::time_point::rep>{}(
+        tp.time_since_epoch().count());
+  }
+};
+
 } // namespace std
 
-namespace logger {
-static inline std::mutex print_mtx;
-using log_queue_t = std::priority_queue<log_entry, std::pmr::vector<log_entry>,
-                                        std::greater<log_entry>>;
-static inline log_queue_t log_queue;
-static inline std::mutex queue_mtx;
-static inline std::condition_variable logger_cv;
-static inline std::thread logger_thread;
-static inline bool stop_logger = false;
-
-enum flags { none = 0x0, bold = 0b0001, ansi_colours = 0b0010 };
-
-static constexpr log_level current_level = log_level::LOG_LEVEL;
-
-inline constexpr const char *get_level_str(log_level level) {
-  switch (level) {
-  case log_level::debug:
-    return "DEBUG";
-  case log_level::info:
-    return "INFO ";
-  case log_level::warn:
-    return "WARN ";
-  case log_level::error:
-    return "ERROR";
-  default:
-    throw std::logic_error("unknown log_level!");
-  }
-}
-
-[[nodiscard]] static inline auto setup_logger() {
-  std::cout << std::fixed << std::setprecision(3) << std::left;
-  std::cerr << std::fixed << std::setprecision(3) << std::left;
-  logger_thread = std::thread([] {
-    while (true) {
-      std::unique_lock queue_lock(queue_mtx);
-      logger_cv.wait(queue_lock, [] {
-        std::unique_lock print_lock(print_mtx);
-        return stop_logger || not log_queue.empty();
-      });
-
-      if (stop_logger && log_queue.empty()) {
-        break;
-      }
-
-      std::string message = log_queue.top().message();
-      log_queue.pop();
-      queue_lock.unlock();
-
-      std::unique_lock print_lock(print_mtx);
-      std::cerr << message;
-    }
-  });
-  return scope_dtor([]() {
-    {
-      std::unique_lock<std::mutex> lock(queue_mtx);
-      stop_logger = true;
-    }
-    logger_cv.notify_one();
-    if (logger_thread.joinable()) {
-      logger_thread.join();
-    }
-  });
-}
-
-const auto logger_destoy = logger::setup_logger();
-
-template <typename Chrono> inline double duration(Chrono begin, Chrono end) {
-  return std::chrono::duration<double>(end - begin).count();
-}
-
-template <typename Chrono>
-inline std::string time_diff(Chrono begin, Chrono end,
-                             int flags = ansi_colours) {
-  (void)flags;
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(3) << std::left;
-  // if (flags & ansi_colours) {
-  //   oss << COL_GREEN;
-  // }
-  // if (flags & bold) {
-  //   oss << COL_BOLD;
-  // }
-  oss << duration(begin, end) << "s";
-  // if (flags & ansi_colours || flags & bold) {
-  //   oss << COL_RESET;
-  // }
-  return oss.str();
-}
-
-inline std::string progress(std::size_t index, std::size_t size) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2) << std::left
-      << ((double(index + 1) * 100 / size)) << "%";
-  return oss.str();
-}
-
-template <typename... Args>
-struct is_copy_constructible_helper : std::true_type {};
-
-template <typename Head, typename... Tail>
-struct is_copy_constructible_helper<Head, Tail...>
-    : std::conditional_t<std::is_copy_constructible_v<std::decay_t<Head>>,
-                         is_copy_constructible_helper<Tail...>,
-                         std::false_type> {};
-
-template <typename... Args>
-inline constexpr bool is_copy_constructible_v =
-    is_copy_constructible_helper<Args...>::value;
-
-template <log_level Level, typename... Args>
-static inline void _log_impl(const char *colour_code, Args &&...log_args) {
-  if constexpr (Level <= current_level) {
-    auto now = std::chrono::system_clock::now();
-    auto log_message = [now, colour_code,
-                        thread_id = __get_thread_id()](auto &&...args) {
-      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now.time_since_epoch()) %
-                1000;
-      std::time_t tt = std::chrono::system_clock::to_time_t(now);
-      std::tm tm_buf;
-      localtime_r(&tt, &tm_buf);
-
-      std::ostringstream oss;
-      oss << colour_code;
-      oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S") << '.'
-          << std::setfill('0') << std::setw(3) << ms.count() << " ["
-          << std::setfill('0') << std::setw(3) << thread_id << "] "
-          << get_level_str(Level) << " ";
-
-      ((oss << std::forward<decltype(args)>(args) << " "), ...);
-
-      oss << COL_RESET << '\n';
-      return oss.str();
-    };
-
-    std::unique_lock lock(queue_mtx);
-    if constexpr (is_copy_constructible_v<Args...>) {
-      log_queue.emplace(now, std::async(std::launch::deferred, log_message,
-                                        std::forward<Args>(log_args)...));
-    } else {
-      log_queue.emplace(
-          now, std::async(
-                   std::launch::async,
-                   [](std::string message) { return std::move(message); },
-                   log_message(std::forward<Args>(log_args)...)));
-    }
-    logger_cv.notify_one();
-  }
-}
-
-template <typename... Args> inline void debug(Args &&...args) {
-  _log_impl<log_level::debug>(COL_CYAN, std::forward<Args>(args)...);
-}
-
-template <typename... Args> inline void info(Args &&...args) {
-  _log_impl<log_level::info>(COL_RESET, std::forward<Args>(args)...);
-}
-
-template <typename... Args> inline void warn(Args &&...args) {
-  _log_impl<log_level::warn>(COL_YELLOW, std::forward<Args>(args)...);
-}
-
-template <typename... Args> inline void error(Args &&...args) {
-  _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...);
-  std::exit(EXIT_FAILURE);
-}
-
-template <typename... Args> inline void print(Args &&...args) {
-  std::scoped_lock print_lock(print_mtx);
-  ((std::cout << std::forward<Args>(args) << " "), ...);
-  std::cout << COL_RESET << std::endl;
-}
-
-template <typename... Args> inline void printv(Args &&...args) {
-  std::scoped_lock print_lock(print_mtx);
-  ((std::cout << std::forward<Args>(args)), ...); // verbose
-  std::cout << COL_RESET << std::endl;
-}
-
-template <log_level level, typename... Args>
-inline void print_thread(std::uint32_t thread_id, const char *colour_code,
-                         Args &&...args) {
-  if constexpr (level <= current_level) {
-    std::scoped_lock print_lock(print_mtx);
-    std::cout << std::string((thread_id + 1), ' ') << colour_code
-              << std::setw(2) << thread_id << COL_RESET << " ";
-    ((std::cout << std::forward<Args>(args) << " "), ...);
-    std::cout << COL_RESET << std::endl;
-  }
-}
-
-} // namespace logger
+// FIXME: turn logger into a class
 
 #endif // CORE_HPP

@@ -56,16 +56,16 @@ std::vector<graph::vertex> multithreaded::solve(flavour algo,
 
   if (algo != flavour::heuristic) {
     if (max_clique.size() < lower_bound) {
-      const std::string err =
-          " Max Clique with size=" + std::to_string(max_clique.size()) +
-          " have NOT met the lower_bound=" + std::to_string(lower_bound) + "\n";
-      throw std::runtime_error(err.c_str());
+      std::string err =
+          "Max Clique with size=" + std::to_string(max_clique.size()) +
+          " have NOT met the lower_bound=" + std::to_string(lower_bound);
+      throw std::runtime_error(std::move(err));
     } else if (upper_bound == no_upper_bound &&
                (args::expect_size && max_clique.size() != args::size)) {
-      const std::string err =
-          " Max Clique with size=" + std::to_string(max_clique.size()) +
-          " is NOT maximal expected size=" + std::to_string(args::size) + "\n";
-      throw std::runtime_error(err.c_str());
+      std::string err =
+          "Max Clique with size=" + std::to_string(max_clique.size()) +
+          " is NOT maximal expected size=" + std::to_string(args::size);
+      throw std::runtime_error(std::move(err));
     }
   }
 
@@ -133,7 +133,8 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   thread::pool branches(args::num_threads);
 
-  profiler_start("max-clique.prof");
+  std::string prof_name = args::filename + ".prof";
+  profiler_start(prof_name.c_str());
 
   begin = std::chrono::high_resolution_clock::now();
 
@@ -258,10 +259,12 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   profiler_stop();
 
+  double cache_hits_percent = (double(total_cache_hits) / total_branches);
+  cache_hits_percent = std::round(cache_hits_percent * 1000) / 1000;
   logger::info(
-      algo, "finished! found", overall_size, "vertices after", total_branches,
-      "branches and", total_cache_hits, "cache hits with ratio of",
-      (double(total_cache_hits) / total_branches), "in",
+      algo, "finished! found", overall_size, "vertices after",
+      total_branches.load(), "branches and", total_cache_hits.load(),
+      "cache hits with ratio of", cache_hits_percent, "in",
       logger::time_diff(begin, end, logger::ansi_colours | logger::bold));
 }
 
