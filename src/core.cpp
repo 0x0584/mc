@@ -68,6 +68,8 @@ scope_dtor logger::setup_logger() {
       std::scoped_lock print_lock(print_mtx);
       std::cerr << std::move(oss.str());
     }
+    std::cerr << "Logging finished at " << std::chrono::system_clock::now()
+              << '\n';
   });
 
   return scope_dtor([] {

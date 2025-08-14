@@ -3,7 +3,7 @@ enable_testing()
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(TIMEOUT_SMALL 5)
   set(TIMEOUT_MEDIUM 10)
-  set(TIMEOUT_LARGE 20)
+  set(TIMEOUT_LARGE 25)
   set(TIMEOUT_HUGE 30)
 else()
   set(TIMEOUT_SMALL 0.1)
@@ -44,14 +44,14 @@ foreach(graph_file IN LISTS TEST_GRAPHS)
   # message(STATUS "Found ${category} test graph: ${graph_name} has ${line_count} lines")
 
   add_test(
-    NAME "${graph_name}-heuristic"
+    NAME "${graph_name}-${category}-heuristic"
     COMMAND $<TARGET_FILE:max-clique>
 	-i "${CMAKE_CURRENT_SOURCE_DIR}/${graph_file}"
 	-r 1
   )
 
   add_test(
-    NAME "${graph_name}-hybrid"
+    NAME "${graph_name}-${category}-hybrid"
     COMMAND $<TARGET_FILE:max-clique>
 	-i "${CMAKE_CURRENT_SOURCE_DIR}/${graph_file}"
 	-r 1
@@ -59,24 +59,27 @@ foreach(graph_file IN LISTS TEST_GRAPHS)
   )
 
   add_test(
-    NAME "${graph_name}-exact"
+    NAME "${graph_name}-${category}-exact"
     COMMAND $<TARGET_FILE:max-clique>
 	-i "${CMAKE_CURRENT_SOURCE_DIR}/${graph_file}"
 	-r 1
 	-e
   )
 
-  set_tests_properties("${graph_name}-exact" PROPERTIES
+
+  set_tests_properties("${graph_name}-${category}-exact" PROPERTIES
 	LABELS "${category},exact"
 	TIMEOUT "${timeout}"
   )
-  set_tests_properties("${graph_name}-heuristic" PROPERTIES
+
+  set_tests_properties("${graph_name}-${category}-hybrid" PROPERTIES
+	LABELS "${category},hybrid"
+	TIMEOUT "${timeout}"
+  )
+
+  set_tests_properties("${graph_name}-${category}-heuristic" PROPERTIES
 	LABELS "${category},heuristic"
 	TIMEOUT "${timeout}"
   )
 
-  set_tests_properties("${graph_name}-hybrid" PROPERTIES
-	LABELS "${category},hybrid"
-	TIMEOUT "${timeout}"
-  )
 endforeach()

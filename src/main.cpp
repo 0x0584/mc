@@ -29,6 +29,8 @@
 #include "mc.hpp"
 #include "thread.hpp"
 
+#include "pq.hpp"
+
 using namespace mc;
 
 int main(int argc, char *argv[]) {
@@ -47,6 +49,13 @@ int main(int argc, char *argv[]) {
 
   args::parse(argc, argv);
 
+  utils::pq pq;
+
+  pq.emplace(std::string("foo"));
+  pq.emplace(std::string("bar"));
+  pq.emplace(std::string("baz"));
+
+  return EXIT_FAILURE;
   try {
     input in;
     graph_builder builder(in);
