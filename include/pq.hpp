@@ -243,7 +243,6 @@ public:
   template <typename... Args> void emplace(Args &&...args) {
     root =
         merge(pq_node::construct(std::forward<Args>(args)...), std::move(root));
-    root->log("after emplace ");
     count++;
   }
 
@@ -253,46 +252,24 @@ public:
     if (empty()) {
       throw std::runtime_error("cannot pop an empty priority queue.");
     }
-
-    logger::warn("top: ", root->value());
-    logger::flush();
-
     return root->value();
   }
 
-  /*
-    XXX: reset child marks and parents
-    XXX: extract root from the heap
-    XXX: merge the roots child with the top level
-    XXX: loop to add more child
-
-    FIXME: FINISH THE IMPLMENTATION
-   */
   void pop() {
     if (empty()) {
       throw std::runtime_error("cannot pop an empty priority queue.");
     }
-
     count--;
-    logger::info("\n");
-    logger::info("poping:", root->value());
-    logger::flush();
-
-    root->log("root before absord ");
     root->absorb_child();
-    root->log("root after absord ");
     if (auto new_root = root->right();
         (root = root->detach() ? std::move(new_root) : nullptr)) {
-      root->log("after detach ");
       consolidate();
-      root->log("final root ");
+      subtrees.clear();
     }
-    logger::info("pop done");
   }
 
 private:
   void consolidate() {
-    subtrees.clear();
     std::shared_ptr<pq_node> new_root = root;
     while (true) {
       auto d = root->degree();
