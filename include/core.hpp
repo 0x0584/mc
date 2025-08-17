@@ -56,6 +56,7 @@
 #include <iomanip>
 #include <iostream>
 #include <list>
+#include <memory_resource>
 #include <mutex>
 #include <ostream>
 #include <queue>
@@ -66,6 +67,7 @@
 
 #include <cxxabi.h>
 #include <execinfo.h>
+#include <type_traits>
 
 std::uint16_t __get_thread_id();
 
@@ -86,6 +88,55 @@ struct scope_dtor {
 private:
   std::function<void()> callback;
 };
+
+struct gc {
+  gc() : pool(options(), std::pmr::new_delete_resource()) {}
+
+  template <typename T, typename... Args>
+  std::shared_ptr<T> make_shared(Args &&...args) {
+    void *memory = pool.allocate(sizeof(T), alignof(T));
+    T *object = new (memory) T(std::forward<Args>(args)...);
+    auto deleter = [&](T *p) {
+      if (p) {
+        p->~T();
+        pool.deallocate(p, sizeof(T), alignof(T));
+      }
+    };
+    return std::shared_ptr<T>(object, deleter);
+  }
+
+  template <typename T, typename... Args>
+  std::unique_ptr<T> make_unique(Args &&...args) {
+    void *memory = pool.allocate(sizeof(T), alignof(T));
+    T *object = new (memory) T(std::forward<Args>(args)...);
+    auto deleter = [&](T *p) {
+      if (p) {
+        p->~T();
+        pool.deallocate(p, sizeof(T), alignof(T));
+      }
+    };
+    return std::unique_ptr<T>(object, deleter);
+  }
+
+private:
+  static std::pmr::pool_options
+  options(std::size_t max_blocks_per_chunk = 4,
+          std::size_t largest_required_pool_block = 256) {
+    std::pmr::pool_options opts;
+    opts.max_blocks_per_chunk = max_blocks_per_chunk;
+    opts.largest_required_pool_block = largest_required_pool_block;
+    return opts;
+  }
+
+  std::pmr::synchronized_pool_resource pool;
+};
+
+template <typename T, typename = void> struct is_loggable : std::false_type {};
+
+template <typename T>
+struct is_loggable<T, std::void_t<decltype(std::declval<std::ostream &>()
+                                           << std::declval<const T &>())>>
+    : std::true_type {};
 
 struct logger {
   enum class log_level : unsigned {
@@ -109,6 +160,10 @@ struct logger {
   static inline std::condition_variable logger_cv;
   static inline std::thread logger_thread;
   static inline bool stop_logger = false;
+
+  static inline std::mutex flush_mtx;
+  static inline std::condition_variable flush_cv;
+  static inline std::atomic_bool flush_logs = false;
 
   enum flags { none = 0x0, bold = 0b0001, ansi_colours = 0b0010 };
 
@@ -151,6 +206,18 @@ struct logger {
     return oss.str();
   }
 
+  static void flush() {
+    {
+      std::scoped_lock queue_lock(queue_mtx);
+      flush_logs = true;
+      logger_cv.notify_one();
+    }
+    {
+      std::unique_lock flush_lock(flush_mtx);
+      flush_cv.wait(flush_lock, [] { return !flush_logs; });
+    }
+  }
+
   static std::string stacktrace() {
     const int max_frames = 128;
     std::vector<void *> callstack(max_frames);
@@ -182,26 +249,28 @@ struct logger {
 
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
     if constexpr (Level <= current_level) {
       auto now = std::chrono::system_clock::now();
-      auto log_message = [now, colour_code, thread_id = __get_thread_id()](
-                             auto &&...args) mutable {
-        std::ostringstream oss;
-        oss << colour_code;
-        oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id
-            << "] " << get_level_str(Level) << " ";
-        ((oss << std::forward<decltype(args)>(args) << " "), ...);
-        oss << COL_RESET << '\n';
-
-        if constexpr (Level == log_level::error) {
-          oss << '\n' << stacktrace() << '\n';
-        }
-
-        return oss.str();
-      };
+      auto message = std::async(
+          std::launch::deferred,
+          [now, colour_code,
+           thread_id = __get_thread_id()](auto &&...args) mutable {
+            std::ostringstream oss;
+            oss << colour_code;
+            oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id
+                << "] " << get_level_str(Level) << " ";
+            ((oss << std::forward<decltype(args)>(args) << " "), ...);
+            oss << COL_RESET << '\n';
+            if constexpr (Level == log_level::error) {
+              oss << '\n' << stacktrace() << '\n';
+            }
+            return oss.str();
+          },
+          std::forward<Args>(log_args)...);
       std::scoped_lock lock(queue_mtx);
-      log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                             std::forward<Args>(log_args)...));
+      log_queue.emplace_back(now, std::move(message));
     }
   }
 
@@ -225,31 +294,38 @@ struct logger {
   }
 
   template <typename... Args> static void print(Args &&...log_args) {
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
     auto now = std::chrono::system_clock::now();
-    auto log_message = [](auto &&...args) {
-      std::ostringstream oss;
-      ((oss << std::forward<decltype(args)>(args) << " "), ...);
-      oss << '\n';
-      return oss.str();
-    };
+    auto message = std::async(
+        std::launch::deferred,
+        [](auto &&...args) {
+          std::ostringstream oss;
+          ((oss << std::forward<decltype(args)>(args) << " "), ...);
+          oss << '\n';
+          return oss.str();
+        },
+        std::forward<Args>(log_args)...);
     std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                           std::forward<Args>(log_args)...));
-    // logger_cv.notify_one();
+    log_queue.emplace_back(now, std::move(message));
   }
 
   template <typename... Args> static void printv(Args &&...log_args) {
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
+
     auto now = std::chrono::system_clock::now();
-    auto log_message = [](auto &&...args) {
-      std::ostringstream oss;
-      ((oss << std::forward<decltype(args)>(args)), ...);
-      oss << '\n';
-      return oss.str();
-    };
+    auto message = std::async(
+        std::launch::deferred,
+        [](auto &&...args) {
+          std::ostringstream oss;
+          ((oss << std::forward<decltype(args)>(args)), ...);
+          oss << '\n';
+          return oss.str();
+        },
+        std::forward<Args>(log_args)...);
     std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                           std::forward<Args>(log_args)...));
-    // logger_cv.notify_one();
+    log_queue.emplace_back(now, std::move(message));
   }
 
   static inline const auto logger_destoy = logger::setup_logger();
