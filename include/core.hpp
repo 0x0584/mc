@@ -56,6 +56,7 @@
 #include <iomanip>
 #include <iostream>
 #include <list>
+#include <memory_resource>
 #include <mutex>
 #include <ostream>
 #include <queue>
@@ -66,6 +67,7 @@
 
 #include <cxxabi.h>
 #include <execinfo.h>
+#include <type_traits>
 
 std::uint16_t __get_thread_id();
 
@@ -219,6 +221,18 @@ public:
     return oss.str();
   }
 
+  static void flush() {
+    {
+      std::scoped_lock queue_lock(queue_mtx);
+      flush_logs = true;
+      logger_cv.notify_one();
+    }
+    {
+      std::unique_lock flush_lock(flush_mtx);
+      flush_cv.wait(flush_lock, [] { return !flush_logs; });
+    }
+  }
+
   static std::string stacktrace() {
     const int max_frames = 128;
     std::vector<void *> callstack(max_frames);
@@ -279,6 +293,8 @@ public:
 
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
     if constexpr (Level <= current_level) {
       auto now = std::chrono::system_clock::now();
 

@@ -234,6 +234,14 @@ enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
   return sorted_keys(std::make_pair(vertices, colours));
 }
 
+enumerator::sorted_keys
+enumerator::dsatur_colour_sort(std::vector<key> &&vertices) const {
+  assert(not vertices.empty());
+
+  std::vector<colour> colours;
+  std::vector<std::unordered_set<key>> satur;
+}
+
 bool enumerator::is_clique(const std::vector<key> &clique) const {
   for (key v : clique) {
     for (key u : clique) {

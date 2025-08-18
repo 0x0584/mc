@@ -29,6 +29,8 @@
 #include "mc.hpp"
 #include "thread.hpp"
 
+#include "pq.hpp"
+
 using namespace mc;
 
 int main(int argc, char *argv[]) {
@@ -42,7 +44,7 @@ int main(int argc, char *argv[]) {
     } catch (...) {
       logger::error("Uncaught unknown exception!");
     }
-    std::abort();
+    std::abort(); // should never be reached!
   });
 
   args::parse(argc, argv);
@@ -72,9 +74,7 @@ int main(int argc, char *argv[]) {
       }
     }
   } catch (const std::exception &e) {
-    std::unique_lock print_lock(logger::print_mtx);
-    std::cerr << "\n\n" << e.what() << '\n';
-    return EXIT_FAILURE;
+    logger::error(e.what());
   }
 
   return EXIT_SUCCESS;

@@ -94,6 +94,7 @@ struct enumerator {
   void draw(const std::vector<graph::vertex> &clq) const;
 
   sorted_keys greedy_colour_sort(std::vector<key> &&vertices) const;
+  sorted_keys dsatur_colour_sort(std::vector<key> &&vertices) const;
   sorted_keys greedy_colour_sort(
       std::vector<key> &&vertices,
       lru_cache<std::vector<enumerator::key>, std::vector<enumerator::colour>>
