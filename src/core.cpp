@@ -64,9 +64,17 @@ scope_dtor logger::setup_logger() {
         log_processing.pop_front();
         print_log_id++;
       }
-
-      std::scoped_lock print_lock(print_mtx);
-      std::cerr << std::move(oss.str());
+      {
+        std::scoped_lock print_lock(print_mtx);
+        std::cerr << std::move(oss.str());
+      }
+      {
+        std::scoped_lock flush_lock(flush_mtx);
+        if (flush_logs && log_processing.empty()) {
+          flush_logs = false;
+          flush_cv.notify_one();
+        }
+      }
     }
   });
 

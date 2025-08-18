@@ -87,6 +87,66 @@ private:
   std::function<void()> callback;
 };
 
+struct gc {
+  gc() : pool(options(), std::pmr::new_delete_resource()) {}
+
+  template <typename T, typename... Args>
+  std::shared_ptr<T> make_shared(Args &&...args) {
+    void *memory = pool.allocate(sizeof(T), alignof(T));
+    T *object = new (memory) T(std::forward<Args>(args)...);
+    auto deleter = [&](T *p) {
+      if (p) {
+        p->~T();
+        pool.deallocate(p, sizeof(T), alignof(T));
+      }
+    };
+    return std::shared_ptr<T>(object, deleter);
+  }
+
+  template <typename T, typename... Args>
+  std::unique_ptr<T> make_unique(Args &&...args) {
+    void *memory = pool.allocate(sizeof(T), alignof(T));
+    T *object = new (memory) T(std::forward<Args>(args)...);
+    auto deleter = [&](T *p) {
+      if (p) {
+        p->~T();
+        pool.deallocate(p, sizeof(T), alignof(T));
+      }
+    };
+    return std::unique_ptr<T>(object, deleter);
+  }
+
+private:
+  static std::pmr::pool_options
+  options(std::size_t max_blocks_per_chunk = 4,
+          std::size_t largest_required_pool_block = 256) {
+    std::pmr::pool_options opts;
+    opts.max_blocks_per_chunk = max_blocks_per_chunk;
+    opts.largest_required_pool_block = largest_required_pool_block;
+    return opts;
+  }
+
+  std::pmr::synchronized_pool_resource pool;
+};
+
+template <typename T, typename = void> struct is_loggable : std::false_type {};
+
+template <typename T>
+struct is_loggable<T, std::void_t<decltype(std::declval<std::ostream &>()
+                                           << std::declval<const T &>())>>
+    : std::true_type {};
+
+template <typename... Args> struct is_all_movable_helper : std::true_type {};
+
+template <typename Head, typename... Tail>
+struct is_all_movable_helper<Head, Tail...>
+    : std::conditional_t<std::is_lvalue_reference_v<Head> ||
+                             std::is_const_v<std::remove_reference_t<Head>>,
+                         std::false_type, is_all_movable_helper<Tail...>> {};
+
+template <typename... Args>
+inline constexpr bool is_all_movable_v = is_all_movable_helper<Args...>::value;
+
 struct logger {
   enum class log_level : unsigned {
     off = 0,
@@ -102,14 +162,22 @@ struct logger {
 
   struct log_entry;
 
+private:
   static inline std::mutex print_mtx;
+  static inline std::mutex log_id_mtx;
   static inline std::size_t print_log_id = 1;
+
   static inline std::pmr::list<log_entry> log_queue;
   static inline std::mutex queue_mtx;
   static inline std::condition_variable logger_cv;
   static inline std::thread logger_thread;
   static inline bool stop_logger = false;
 
+  static inline std::mutex flush_mtx;
+  static inline std::condition_variable flush_cv;
+  static inline std::atomic_bool flush_logs = false;
+
+public:
   enum flags { none = 0x0, bold = 0b0001, ansi_colours = 0b0010 };
 
   static inline constexpr log_level current_level = log_level::LOG_LEVEL;
@@ -180,28 +248,56 @@ struct logger {
     return oss.str();
   }
 
+  template <typename... Args>
+  static inline std::string process_print_message(Args &&...args) {
+    std::ostringstream oss;
+    ((oss << std::forward<Args>(args) << " "), ...);
+    oss << '\n';
+    return oss.str();
+  }
+
+  template <typename... Args>
+  static inline std::string process_printv_message(Args &&...args) {
+    std::ostringstream oss;
+    ((oss << std::forward<Args>(args)), ...);
+    oss << '\n';
+    return oss.str();
+  }
+
+  template <typename... Args>
+  static inline std::string process_message(auto Level, auto now,
+                                            auto colour_code, auto thread_id,
+                                            Args &&...args) {
+    std::ostringstream oss;
+    oss << colour_code;
+    oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id << "] "
+        << get_level_str(Level) << " ";
+    ((oss << std::forward<Args>(args) << " "), ...);
+    oss << COL_RESET << '\n';
+    return oss.str();
+  }
+
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
     if constexpr (Level <= current_level) {
       auto now = std::chrono::system_clock::now();
-      auto log_message = [now, colour_code, thread_id = __get_thread_id()](
-                             auto &&...args) mutable {
-        std::ostringstream oss;
-        oss << colour_code;
-        oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id
-            << "] " << get_level_str(Level) << " ";
-        ((oss << std::forward<decltype(args)>(args) << " "), ...);
-        oss << COL_RESET << '\n';
 
-        if constexpr (Level == log_level::error) {
-          oss << '\n' << stacktrace() << '\n';
-        }
+      std::function<std::string()> message;
+      if constexpr (is_all_movable_v<Args...>) {
+        message = [now, colour_code, thread_id = __get_thread_id(),
+                   ... log_args_captured = std::forward<Args>(log_args)] {
+          return process_message(Level, now, colour_code, thread_id,
+                                 log_args_captured...);
+        };
+      } else {
+        std::string processed_msg =
+            process_message(Level, now, colour_code, __get_thread_id(),
+                            std::forward<Args>(log_args)...);
+        message = [msg = std::move(processed_msg)] { return msg; };
+      }
 
-        return oss.str();
-      };
       std::scoped_lock lock(queue_mtx);
-      log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                             std::forward<Args>(log_args)...));
+      log_queue.emplace_back(std::move(message));
     }
   }
 
@@ -220,40 +316,98 @@ struct logger {
   }
 
   template <typename... Args> static void error(Args &&...args) {
-    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...);
+    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)..., '\n',
+                                stacktrace(), '\n');
     std::exit(EXIT_FAILURE);
   }
 
   template <typename... Args> static void print(Args &&...log_args) {
-    auto now = std::chrono::system_clock::now();
-    auto log_message = [](auto &&...args) {
-      std::ostringstream oss;
-      ((oss << std::forward<decltype(args)>(args) << " "), ...);
-      oss << '\n';
-      return oss.str();
-    };
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
+
+    std::function<std::string()> message;
+    if constexpr (is_all_movable_v<Args...>) {
+      message = [... log_args_captured = std::forward<Args>(log_args)] {
+        return process_print_message(log_args_captured...);
+      };
+    } else {
+      std::string processed_msg =
+          process_print_message(std::forward<Args>(log_args)...);
+      message = [msg = std::move(processed_msg)] { return msg; };
+    }
+
     std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                           std::forward<Args>(log_args)...));
-    // logger_cv.notify_one();
+    log_queue.emplace_back(std::move(message));
   }
 
   template <typename... Args> static void printv(Args &&...log_args) {
-    auto now = std::chrono::system_clock::now();
-    auto log_message = [](auto &&...args) {
-      std::ostringstream oss;
-      ((oss << std::forward<decltype(args)>(args)), ...);
-      oss << '\n';
-      return oss.str();
-    };
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
+
+    std::function<std::string()> message;
+    if constexpr (is_all_movable_v<Args...>) {
+      message = [... log_args_captured = std::forward<Args>(log_args)] {
+        return process_print_message(log_args_captured...);
+      };
+    } else {
+      std::string processed_msg =
+          process_print_message(std::forward<Args>(log_args)...);
+      message = [msg = std::move(processed_msg)] { return msg; };
+    }
+
     std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(now, std::async(std::launch::deferred, log_message,
-                                           std::forward<Args>(log_args)...));
-    // logger_cv.notify_one();
+    log_queue.emplace_back(std::move(message));
   }
 
   static inline const auto logger_destoy = logger::setup_logger();
 }; // namespace logger
+
+struct logger::log_entry {
+  friend std::less<log_entry>;
+  friend std::greater<log_entry>;
+  friend std::equal_to<log_entry>;
+
+  log_entry() = default;
+
+  log_entry(const log_entry &) = delete;
+  log_entry(log_entry &&) = default;
+
+  log_entry &operator=(const log_entry &) = delete;
+  log_entry &operator=(log_entry &&) = default;
+
+  log_entry(std::function<std::string()> &&msg) : msg(std::move(msg)) {
+    log_id = ++global_log_id;
+  }
+
+  std::size_t id() const { return log_id; }
+  std::string message() const { return msg(); }
+
+private:
+  static inline std::atomic_size_t global_log_id = 0;
+
+  std::size_t log_id; // XXX: add id_to_print
+  std::function<std::string()> msg;
+};
+
+namespace std {
+template <> struct less<logger::log_entry> {
+  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
+    return lhs.log_id < rhs.log_id;
+  }
+};
+
+template <> struct greater<logger::log_entry> {
+  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
+    return lhs.log_id > rhs.log_id;
+  }
+};
+
+template <> struct equal_to<logger::log_entry> {
+  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
+    return lhs.log_id == rhs.log_id;
+  }
+};
+} // namespace std
 
 #ifdef assert
 #undef assert
@@ -358,66 +512,6 @@ private:
   bool pool_is_full = false;
 };
 } // namespace thread
-
-struct logger::log_entry {
-  using time_point = std::chrono::time_point<std::chrono::system_clock>;
-
-  friend std::less<log_entry>;
-  friend std::greater<log_entry>;
-  friend std::equal_to<log_entry>;
-
-  log_entry() = default;
-
-  log_entry(const log_entry &) = delete;
-  log_entry(log_entry &&) = default;
-
-  log_entry &operator=(const log_entry &) = delete;
-  log_entry &operator=(log_entry &&) = default;
-
-  log_entry(time_point stamp, std::future<std::string> msg)
-      : stamp(stamp), msg(std::move(msg)) {
-    log_id = ++global_log_id;
-  }
-
-  std::size_t id() const { return log_id; }
-  std::string message() const { return msg.get(); }
-  const time_point &timestamp() const { return stamp; }
-
-private:
-  static inline std::atomic_size_t global_log_id = 0;
-
-  std::size_t log_id; // XXX: add id_to_print
-  time_point stamp;
-  mutable std::future<std::string> msg;
-};
-
-namespace std {
-template <> struct less<logger::log_entry> {
-  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.log_id < rhs.log_id;
-  }
-};
-
-template <> struct greater<logger::log_entry> {
-  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.log_id > rhs.log_id;
-  }
-};
-
-template <> struct equal_to<logger::log_entry> {
-  bool operator()(const logger::log_entry &lhs, const logger::log_entry &rhs) {
-    return lhs.log_id == rhs.log_id;
-  }
-};
-
-template <> struct hash<logger::log_entry::time_point> {
-  size_t operator()(const logger::log_entry::time_point &tp) const {
-    return std::hash<logger::log_entry::time_point::rep>{}(
-        tp.time_since_epoch().count());
-  }
-};
-
-} // namespace std
 
 // FIXME: turn logger into a class
 
