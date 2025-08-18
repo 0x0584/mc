@@ -74,9 +74,7 @@ int main(int argc, char *argv[]) {
       }
     }
   } catch (const std::exception &e) {
-    std::unique_lock print_lock(logger::print_mtx);
-    std::cerr << "\n\n" << e.what() << '\n';
-    return EXIT_FAILURE;
+    logger::error(e.what());
   }
 
   return EXIT_SUCCESS;
