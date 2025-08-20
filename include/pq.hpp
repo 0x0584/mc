@@ -6,10 +6,6 @@
 namespace utils {
 template <typename T, typename Cmp = std::less<T>> class pq {
 public:
-  using value_type = T;
-  using comparator_type = Cmp;
-
-  pq() = default;
   ~pq() = default;
 
   pq(const pq &) = delete;
@@ -17,6 +13,11 @@ public:
 
   pq &operator=(const pq &) = delete;
   pq &operator=(pq &&) = default;
+
+  pq() : pq(Cmp()) {}
+
+  template <typename Comparator>
+  explicit pq(const Comparator &cmp_in) : cmp(cmp_in) {}
 
 private:
   struct pq_node : std::enable_shared_from_this<pq_node> {
@@ -112,11 +113,11 @@ private:
     std::weak_ptr<pq_node> left_;
     std::shared_ptr<pq_node> child_;
     std::shared_ptr<pq_node> right_;
-    value_type value_;
+    T value_;
     std::size_t degree_;
 
   public:
-    const value_type &value() const { return value_; }
+    const T &value() const { return value_; }
 
     const std::shared_ptr<pq_node> &right() const { return right_; }
     void right(std::shared_ptr<pq_node> ptr) { right_ = std::move(ptr); }
@@ -130,26 +131,23 @@ private:
     std::size_t degree() const { return degree_; }
   };
 
-  struct comparator {
-    inline bool operator()(const pq_node &a, const pq_node &b) const {
-      return cmp(a.value(), b.value());
-    }
+  inline bool compare(const pq_node &a, const pq_node &b) const {
+    return cmp(a.value(), b.value());
+  }
 
-    inline bool operator()(const std::weak_ptr<pq_node> &a,
-                           const std::weak_ptr<pq_node> &b) const {
-      return operator()(a.lock(), b.lock());
-    }
+  inline bool compare(const std::weak_ptr<pq_node> &a,
+                      const std::weak_ptr<pq_node> &b) const {
+    return compare(a.lock(), b.lock());
+  }
 
-    inline bool operator()(const std::shared_ptr<pq_node> &a,
-                           const std::shared_ptr<pq_node> &b) const {
-      assert(a != nullptr, "this should not trigger");
-      assert(b != nullptr, "this should not trigger");
-      return operator()(*a, *b);
-    }
+  inline bool compare(const std::shared_ptr<pq_node> &a,
+                      const std::shared_ptr<pq_node> &b) const {
+    assert(a != nullptr, "this should not trigger");
+    assert(b != nullptr, "this should not trigger");
+    return compare(*a, *b);
+  }
 
-  private:
-    comparator_type cmp;
-  } cmp;
+  const Cmp &cmp;
 
   std::shared_ptr<pq_node> root;
   std::size_t count = 0;
@@ -162,18 +160,18 @@ public:
     if (root == nullptr) {
       root = std::move(node);
     } else {
-      if (cmp(node, root)) {
+      if (compare(node, root)) {
         std::swap(root, node);
       }
       root->attach(std::move(node));
     }
   }
 
-  void push(value_type val) { emplace(std::move(val)); }
+  void push(T val) { emplace(std::move(val)); }
 
   bool empty() const { return root == nullptr; }
 
-  const value_type &top() const {
+  const T &top() const {
     if (empty()) {
       throw std::runtime_error("cannot pop an empty priority queue.");
     }
@@ -208,7 +206,7 @@ private:
       } else if (u) {
         subtrees.erase(d);
         u->detach();
-        if (cmp(root, u)) {
+        if (compare(root, u)) {
           root->adopt_child(u);
         } else {
           auto left = root->left();
@@ -218,7 +216,7 @@ private:
           root = u;
         }
       } else {
-        if (cmp(root, new_root)) {
+        if (compare(root, new_root)) {
           new_root = root;
         }
         subtrees[root->degree()] = root;
