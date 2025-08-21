@@ -2,6 +2,7 @@
 #define PQ_HPP
 
 #include "core.hpp"
+#include <array>
 
 namespace utils {
 template <typename T, typename Cmp = std::less<T>> class pq {
@@ -36,7 +37,7 @@ private:
 
     template <typename... Args>
     static std::shared_ptr<pq_node> construct(Args &&...args) {
-      auto node = std::make_shared<pq_node>(std::forward<Args>(args)...);
+      auto node = gc.make_shared<pq_node>(std::forward<Args>(args)...);
       node->right_ = node;
       node->left_ = node;
       return node;
@@ -151,7 +152,10 @@ private:
 
   std::shared_ptr<pq_node> root;
   std::size_t count = 0;
-  std::unordered_map<std::size_t, std::shared_ptr<pq_node>> subtrees;
+  static inline constexpr std::uint16_t PQ_HEIGHT_UPPER_BOUND = 64;
+  std::array<std::shared_ptr<pq_node>, PQ_HEIGHT_UPPER_BOUND> subtrees;
+
+  static inline gc gc;
 
 public:
   template <typename... Args> void emplace(Args &&...args) {
@@ -191,20 +195,24 @@ public:
     auto new_root = root->right();
     root->detach();
     root = std::move(new_root);
-    subtrees.clear();
+    subtrees.fill(nullptr);
     consolidate();
   }
 
 private:
   void consolidate() {
     std::shared_ptr<pq_node> new_root = root;
+    auto start = root;
     while (true) {
       auto d = root->degree();
+      if (d >= PQ_HEIGHT_UPPER_BOUND) {
+        throw std::runtime_error("pq grew too much!");
+      }
       auto u = subtrees[d];
-      if (u == root) {
+      if (u == start) {
         break;
       } else if (u) {
-        subtrees.erase(d);
+        subtrees[d] = nullptr;
         u->detach();
         if (compare(root, u)) {
           root->adopt_child(u);

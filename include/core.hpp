@@ -90,33 +90,52 @@ private:
 };
 
 struct gc {
-  gc() : pool(options(), std::pmr::new_delete_resource()) {}
+  inline gc() : pool(options(), std::pmr::new_delete_resource()) {}
 
   template <typename T, typename... Args>
-  std::shared_ptr<T> make_shared(Args &&...args) {
-    void *memory = pool.allocate(sizeof(T), alignof(T));
-    T *object = new (memory) T(std::forward<Args>(args)...);
-    auto deleter = [&](T *p) {
-      if (p) {
-        p->~T();
-        pool.deallocate(p, sizeof(T), alignof(T));
-      }
-    };
-    return std::shared_ptr<T>(object, deleter);
+  inline std::shared_ptr<T> make_shared(Args &&...args) {
+    std::pmr::polymorphic_allocator<T> alloc(&pool);
+    return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
   }
 
+  template <typename T> struct deleter {
+    inline deleter() noexcept : resource(nullptr) {}
+
+    inline explicit deleter(std::pmr::memory_resource *res) noexcept
+        : resource(res) {}
+
+    inline void operator()(T *p) const {
+      if (p && resource) {
+        std::pmr::polymorphic_allocator<T> alloc(resource);
+        alloc.deallocate(p, 1);
+      }
+    }
+
+    inline const std::pmr::memory_resource *get_resource() const {
+      return resource;
+    }
+
+  private:
+    std::pmr::memory_resource *resource;
+  };
+
   template <typename T, typename... Args>
-  std::unique_ptr<T> make_unique(Args &&...args) {
+  inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
     void *memory = pool.allocate(sizeof(T), alignof(T));
     T *object = new (memory) T(std::forward<Args>(args)...);
-    auto deleter = [&](T *p) {
-      if (p) {
-        p->~T();
-        pool.deallocate(p, sizeof(T), alignof(T));
-      }
-    };
-    return std::unique_ptr<T>(object, deleter);
+    return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
   }
+
+  inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
+    return std::pmr::polymorphic_allocator<std::byte>(&pool);
+  }
+
+  template <typename T>
+  inline std::pmr::polymorphic_allocator<T> get_allocator() {
+    return std::pmr::polymorphic_allocator<T>(&pool);
+  }
+
+  inline std::pmr::unsynchronized_pool_resource &get_pool() { return pool; }
 
 private:
   static std::pmr::pool_options
@@ -128,7 +147,7 @@ private:
     return opts;
   }
 
-  std::pmr::synchronized_pool_resource pool;
+  std::pmr::unsynchronized_pool_resource pool;
 };
 
 template <typename T, typename = void> struct is_loggable : std::false_type {};

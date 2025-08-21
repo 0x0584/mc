@@ -33,6 +33,42 @@
 
 using namespace mc;
 
+auto gen_keys(auto size) {
+  std::vector<enumerator::key> keys(size);
+  std::iota(keys.begin(), keys.end(), 0);
+  logger::debug("V=", keys.size());
+  return keys;
+}
+
+void print(const char *s, auto &key_cols) {
+  std::ostringstream oss;
+  oss << "using " << s << " " << key_cols.size() << " ";
+  for (auto [k, col] : key_cols) {
+    oss << k << "=" << col << " ";
+  }
+  logger::debug(oss.str());
+  logger::warn(s, key_cols.highest_colour());
+}
+
+void is_valid_colouring(const char *str, auto &key_cols, enumerator &e) {
+  static gc gc;
+
+  std::pmr::unordered_map<enumerator::key, enumerator::colour> ktoc(
+      gc.get_allocator());
+  ktoc.reserve(key_cols.size());
+
+  for (const auto &[u, u_col] : key_cols) {
+    ktoc.emplace(u, u_col);
+  }
+
+  for (const auto &[u, u_col] : ktoc) {
+    for (auto v : e.neighbours(u, {})) {
+      enumerator::colour v_col = ktoc[v];
+      assert(u_col != v_col, str, u_col, "should not be", v_col);
+    }
+  }
+}
+
 int main(int argc, char *argv[]) {
   std::set_terminate([] {
     try {
@@ -54,8 +90,21 @@ int main(int argc, char *argv[]) {
     graph_builder builder(in);
     std::pmr::monotonic_buffer_resource vertices_pool;
     std::pmr::monotonic_buffer_resource edges_pool;
-    multithreaded algo(builder.build(vertices_pool, edges_pool));
-    // return 1;
+    graph g = builder.build(vertices_pool, edges_pool);
+    enumerator e(g);
+
+    auto greedy_cols = e.greedy_colour_sort(gen_keys(e.vertex_count()));
+    is_valid_colouring("greedy", greedy_cols, e);
+    print("greedy", greedy_cols);
+
+    auto dsatur_cols = e.dsatur_colour_sort(gen_keys(e.vertex_count()));
+    is_valid_colouring("dsatur", dsatur_cols, e);
+    print("dsatur", dsatur_cols);
+
+    return 42;
+
+    multithreaded algo(std::move(g));
+
     for (long turn = 1; turn <= args::num_turns; ++turn) {
       if (args::num_turns != 1)
         logger::info("Turn", turn, "/", args::num_turns);
