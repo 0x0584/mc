@@ -27,14 +27,11 @@
 
 #include "graph.hpp"
 #include "mc.hpp"
-#include "thread.hpp"
-
-#include "pq.hpp"
 
 using namespace mc;
 
 auto gen_keys(auto size) {
-  std::vector<enumerator::key> keys(size);
+  std::pmr::vector<graph::key> keys(size);
   std::iota(keys.begin(), keys.end(), 0);
   logger::debug("V=", keys.size());
   return keys;
@@ -50,24 +47,22 @@ void print(const char *s, auto &key_cols) {
   logger::warn(s, key_cols.highest_colour());
 }
 
-void is_valid_colouring(const char *str, auto &key_cols, enumerator &e) {
-  static gc gc;
+// void is_valid_colouring(const char *str, auto &key_cols, const graph &g) {
+//   std::pmr::unordered_map<graph::key, mc::colour> ktoc(
+//       memory::pool());
+//   ktoc.reserve(key_cols.size());
 
-  std::pmr::unordered_map<enumerator::key, enumerator::colour> ktoc(
-      gc.get_allocator());
-  ktoc.reserve(key_cols.size());
+//   for (const auto &[u, u_col] : key_cols) {
+//     ktoc.emplace(u, u_col);
+//   }
 
-  for (const auto &[u, u_col] : key_cols) {
-    ktoc.emplace(u, u_col);
-  }
-
-  for (const auto &[u, u_col] : ktoc) {
-    for (auto v : e.neighbours(u, {})) {
-      enumerator::colour v_col = ktoc[v];
-      assert(u_col != v_col, str, u_col, "should not be", v_col);
-    }
-  }
-}
+//   for (const auto &[u, u_col] : ktoc) {
+//     for (auto v : e.neighbours(u, {})) {
+//       enumerator::colour v_col = ktoc[v];
+//       assert(u_col != v_col, str, u_col, "should not be", v_col);
+//     }
+//   }
+// }
 
 int main(int argc, char *argv[]) {
   std::set_terminate([] {
@@ -85,45 +80,42 @@ int main(int argc, char *argv[]) {
 
   args::parse(argc, argv);
 
-  try {
-    input in;
-    graph_builder builder(in);
-    std::pmr::monotonic_buffer_resource vertices_pool;
-    std::pmr::monotonic_buffer_resource edges_pool;
-    graph g = builder.build(vertices_pool, edges_pool);
-    enumerator e(g);
+  input in;
+  graph_builder builder(in);
+  graph g = builder.build(args::undirected);
 
-    auto greedy_cols = e.greedy_colour_sort(gen_keys(e.vertex_count()));
-    is_valid_colouring("greedy", greedy_cols, e);
-    print("greedy", greedy_cols);
+  auto start = std::chrono::system_clock::now();
 
-    auto dsatur_cols = e.dsatur_colour_sort(gen_keys(e.vertex_count()));
-    is_valid_colouring("dsatur", dsatur_cols, e);
-    print("dsatur", dsatur_cols);
+  profiler_start("colour.prof");
+  auto cols = g.colour_sort(gen_keys(g.vertex_count()));
+  profiler_stop();
 
-    return 42;
+  auto end = std::chrono::system_clock::now();
+  logger::warn("dsatur done in", logger::time_diff(start, end));
 
-    multithreaded algo(std::move(g));
+  return 42;
 
-    for (long turn = 1; turn <= args::num_turns; ++turn) {
-      if (args::num_turns != 1)
-        logger::info("Turn", turn, "/", args::num_turns);
-      auto clique = algo.solve(args::exec_mode);
-      std::vector<graph::vertex> sorted_clique(clique.cbegin(), clique.cend());
-      std::sort(sorted_clique.begin(), sorted_clique.end());
-      std::ostringstream oss;
-      oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
-      for (graph::vertex e : sorted_clique) {
-        oss << e << " ";
-      }
-      oss << "}";
-      logger::print(oss.str());
-      if (args::draw) {
-        algo.draw(clique);
-      }
+  multithreaded algo(g);
+  for (long turn = 1; turn <= args::num_turns; ++turn) {
+    if (args::num_turns != 1) {
+      logger::info("Turn", turn, "/", args::num_turns);
     }
-  } catch (const std::exception &e) {
-    logger::error(e.what());
+
+    auto clique = algo.solve(args::exec_mode);
+    std::pmr::vector<vertex> sorted_clique(clique.cbegin(), clique.cend(),
+                                           memory::pool());
+    std::sort(sorted_clique.begin(), sorted_clique.end());
+    std::ostringstream oss;
+    oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
+    for (vertex v : sorted_clique) {
+      oss << v << " ";
+    }
+    oss << "}";
+    logger::print(oss.str());
+
+    if (args::draw) {
+      algo.draw(clique);
+    }
   }
 
   return EXIT_SUCCESS;

@@ -89,42 +89,45 @@ private:
   std::function<void()> callback;
 };
 
+namespace memory {
+std::pmr::synchronized_pool_resource *pool();
+
+template <typename T, typename... Args>
+inline std::shared_ptr<T> make_shared(Args &&...args) {
+  std::pmr::polymorphic_allocator<T> alloc(pool());
+  return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
+}
+
+template <typename T> struct deleter {
+  inline deleter() noexcept : resource(nullptr) {}
+
+  inline explicit deleter(std::pmr::memory_resource *res) noexcept
+      : resource(res) {}
+
+  inline void operator()(T *p) const {
+    if (p && resource) {
+      std::pmr::polymorphic_allocator<T> alloc(resource);
+      alloc.deallocate(p, 1);
+    }
+  }
+
+  inline const std::pmr::memory_resource *get_resource() const {
+    return resource;
+  }
+
+private:
+  std::pmr::memory_resource *resource;
+};
+
+template <typename T, typename... Args>
+inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
+  void *memory = pool()->allocate(sizeof(T), alignof(T));
+  T *object = new (memory) T(std::forward<Args>(args)...);
+  return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
+}
+
 struct gc {
   inline gc() : pool(options(), std::pmr::new_delete_resource()) {}
-
-  template <typename T, typename... Args>
-  inline std::shared_ptr<T> make_shared(Args &&...args) {
-    std::pmr::polymorphic_allocator<T> alloc(&pool);
-    return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
-  }
-
-  template <typename T> struct deleter {
-    inline deleter() noexcept : resource(nullptr) {}
-
-    inline explicit deleter(std::pmr::memory_resource *res) noexcept
-        : resource(res) {}
-
-    inline void operator()(T *p) const {
-      if (p && resource) {
-        std::pmr::polymorphic_allocator<T> alloc(resource);
-        alloc.deallocate(p, 1);
-      }
-    }
-
-    inline const std::pmr::memory_resource *get_resource() const {
-      return resource;
-    }
-
-  private:
-    std::pmr::memory_resource *resource;
-  };
-
-  template <typename T, typename... Args>
-  inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
-    void *memory = pool.allocate(sizeof(T), alignof(T));
-    T *object = new (memory) T(std::forward<Args>(args)...);
-    return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
-  }
 
   inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
     return std::pmr::polymorphic_allocator<std::byte>(&pool);
@@ -135,11 +138,11 @@ struct gc {
     return std::pmr::polymorphic_allocator<T>(&pool);
   }
 
-  inline std::pmr::unsynchronized_pool_resource &get_pool() { return pool; }
+  inline std::pmr::synchronized_pool_resource *get_pool() { return &pool; }
 
 private:
   static std::pmr::pool_options
-  options(std::size_t max_blocks_per_chunk = 4,
+  options(std::size_t max_blocks_per_chunk = 2,
           std::size_t largest_required_pool_block = 256) {
     std::pmr::pool_options opts;
     opts.max_blocks_per_chunk = max_blocks_per_chunk;
@@ -147,8 +150,10 @@ private:
     return opts;
   }
 
-  std::pmr::unsynchronized_pool_resource pool;
+  std::pmr::synchronized_pool_resource pool;
 };
+
+} // namespace memory
 
 template <typename T, typename = void> struct is_loggable : std::false_type {};
 
@@ -219,8 +224,24 @@ public:
   }
 
   template <typename Chrono>
-  static inline double duration(Chrono begin, Chrono end) {
-    return std::chrono::duration<double>(end - begin).count();
+  static inline auto duration(Chrono begin, Chrono end) {
+    auto duration_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+            .count();
+    std::ostringstream oss;
+    if (duration_ns < 1000) {
+      oss << duration_ns << " ns";
+    } else if (duration_ns < 1000000) {
+      double duration_us = static_cast<double>(duration_ns) / 1000.0;
+      oss << duration_us << " µs";
+    } else if (duration_ns < 1000000000) {
+      double duration_ms = static_cast<double>(duration_ns) / 1000000.0;
+      oss << duration_ms << " ms";
+    } else {
+      double duration_s = static_cast<double>(duration_ns) / 1000000000.0;
+      oss << duration_s << " s";
+    }
+    return oss.str();
   }
 
   template <typename Chrono>
@@ -229,7 +250,7 @@ public:
     (void)flags;
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3) << std::left;
-    oss << duration(begin, end) << "s";
+    oss << duration(begin, end);
     return oss.str();
   }
 
@@ -547,6 +568,26 @@ private:
   bool pool_is_full = false;
 };
 } // namespace thread
+
+struct scope_timer {
+  explicit inline scope_timer(const char *msg)
+      : callback([msg = std::move(msg),
+                  start = std::chrono::high_resolution_clock::now()] {
+          auto end = std::chrono::high_resolution_clock::now();
+          logger::warn(std::move(msg), logger::time_diff(start, end));
+        }) {}
+
+private:
+  scope_dtor callback;
+};
+
+// #ifndef NDEBUG
+// #define make_scope_timer(x) scope_timer x(#x)
+// #else
+#define make_scope_timer(x)                                                    \
+  do {                                                                         \
+  } while (0)
+// #endif
 
 // FIXME: turn logger into a class
 

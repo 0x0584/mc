@@ -24,6 +24,13 @@ std::uint16_t __get_thread_id() {
   return __thread_id;
 }
 
+namespace memory {
+std::pmr::synchronized_pool_resource *pool() {
+  thread_local gc mem;
+  return mem.get_pool();
+}
+} // namespace memory
+
 scope_dtor logger::setup_logger() {
   std::cout << std::fixed << std::setprecision(3) << std::left;
   std::cerr << std::fixed << std::setprecision(3) << std::left;

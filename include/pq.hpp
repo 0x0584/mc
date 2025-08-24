@@ -37,7 +37,7 @@ private:
 
     template <typename... Args>
     static std::shared_ptr<pq_node> construct(Args &&...args) {
-      auto node = gc.make_shared<pq_node>(std::forward<Args>(args)...);
+      auto node = memory::make_shared<pq_node>(std::forward<Args>(args)...);
       node->right_ = node;
       node->left_ = node;
       return node;
@@ -154,8 +154,6 @@ private:
   std::size_t count = 0;
   static inline constexpr std::uint16_t PQ_HEIGHT_UPPER_BOUND = 64;
   std::array<std::shared_ptr<pq_node>, PQ_HEIGHT_UPPER_BOUND> subtrees;
-
-  static inline gc gc;
 
 public:
   template <typename... Args> void emplace(Args &&...args) {

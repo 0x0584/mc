@@ -1,9 +1,12 @@
 #include "input.hpp"
+#include "core.hpp"
 
 namespace mc {
 std::uint16_t args::num_threads = thread::num_available_threads;
 
 void args::parse(int argc, char *argv[]) {
+  num_threads = thread::num_available_threads;
+  logger::warn(thread::num_available_threads);
   for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
     switch (ch) {
     case 'r':

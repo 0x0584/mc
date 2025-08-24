@@ -10,6 +10,22 @@
 #include "logger.hpp"
 
 namespace std {
+template <typename T> struct hash<pmr::vector<T>> {
+  [[nodiscard]] inline std::size_t
+  operator()(const pmr::vector<T> &v_ref) const {
+    std::size_t seed = v_ref.size();
+    pmr::vector<T> tmp = v_ref;
+    std::sort(tmp.begin(), tmp.end());
+    for (T e : tmp) {
+      seed ^= hash_func(e) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+    return seed;
+  }
+
+private:
+  std::hash<T> hash_func;
+};
+
 template <typename T> struct hash<vector<T>> {
   [[nodiscard]] inline std::size_t operator()(const vector<T> &v_ref) const {
     std::size_t seed = v_ref.size();
@@ -35,6 +51,17 @@ template <typename T> struct equal_to<vector<T>> {
     return atmp == btmp;
   }
 };
+
+template <typename T> struct equal_to<pmr::vector<T>> {
+  [[nodiscard]] inline bool operator()(const pmr::vector<T> &a,
+                                       const pmr::vector<T> &b) const {
+    pmr::vector<T> atmp = a;
+    std::sort(atmp.begin(), atmp.end());
+    pmr::vector<T> btmp = b;
+    std::sort(btmp.begin(), btmp.end());
+    return atmp == btmp;
+  }
+};
 } // namespace std
 
 namespace mc {
@@ -48,7 +75,7 @@ struct lru_cache {
   using cache_store = std::pmr::list<entry>;
   using key_hash = Hash;
   using key_equal = Equal;
-  using key_store = std::pmr::unordered_map<std::reference_wrapper<key>,
+  using key_store = std::pmr::unordered_map<std::reference_wrapper<const key>,
                                             typename cache_store::iterator,
                                             key_hash, key_equal>;
   explicit lru_cache(std::size_t capacity)
@@ -58,41 +85,41 @@ struct lru_cache {
     keys.reserve(capacity);
   }
 
-  std::optional<entry> get(key &k) {
+  std::optional<entry> get(const key &k) {
     std::unique_lock<std::mutex> lock(mtx);
     std::optional<entry> value;
-    if (keys.contains(k)) {
-      typename cache_store::iterator it = keys[k];
-      hit(it);
-      value.emplace(*it);
+    if (auto it = keys.find(k); it != keys.end()) {
+      typename cache_store::iterator e = it->second;
+      hit(e);
+      value.emplace(*e);
     }
     return value;
   }
 
-  entry set(key &k, value &v) {
+  entry set(const key &k, value v) {
     std::unique_lock<std::mutex> lock(mtx);
-    typename cache_store::iterator it;
-    if (keys.contains(k)) {
-      it = keys[k];
-      it->second = std::move(v);
-      hit(it);
+    typename cache_store::iterator e;
+    if (auto it = keys.find(k); it != keys.end()) {
+      e = it->second;
+      e->second = std::move(v);
+      hit(e);
     } else {
       if (store.size() == _capacity) {
-        it = store.end();
-        --it;
-        keys.erase(it->first);
-        it->first = std::move(k);
-        it->second = std::move(v);
-        hit(it);
+        e = store.end();
+        --e;
+        keys.erase(e->first);
+        e->first = std::move(k);
+        e->second = std::move(v);
+        hit(e);
       } else {
-        it = store.emplace(store.begin(), std::move(k), std::move(v));
+        e = store.emplace(store.begin(), std::move(k), std::move(v));
         if (store.size() == _capacity) {
           logger::debug("Cache is full!");
         }
       }
-      keys.emplace(it->first, it);
+      keys.emplace(e->first, e);
     }
-    return *it;
+    return *e;
   }
 
   inline std::size_t size() const {
@@ -105,8 +132,8 @@ struct lru_cache {
   inline bool full() const { return size() == _capacity; }
 
 private:
-  inline void hit(cache_store::iterator it) {
-    store.splice(store.begin(), store, it);
+  inline void hit(cache_store::iterator entry_it) {
+    store.splice(store.begin(), store, entry_it);
   }
 
   mutable std::mutex mtx;

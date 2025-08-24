@@ -5,7 +5,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 
   flavour.cpp
   graph.cpp
-  enumerator.cpp
+#  enumerator.cpp
   mc.cpp
 
   main.cpp

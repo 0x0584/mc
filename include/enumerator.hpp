@@ -35,8 +35,6 @@ namespace mc {
 // std::unordered_map within the graph, it acts also as a handler of vertices
 // for colouring and inducing vertex-neighbourhood
 struct enumerator {
-  using adjacency_vector =
-      std::vector<std::pair<graph::vertex, graph::neighbours_set>>;
 
   // this is a primitive type too, same as graph::vertex so changes in the
   // implementation are required in order to avoid overhead of copying
@@ -48,7 +46,7 @@ struct enumerator {
 
   class sorted_keys;
 
-  explicit enumerator(graph &G);
+  explicit enumerator(const graph &G);
 
   inline std::size_t vertex_count() const { return V.size(); }
 
@@ -63,8 +61,7 @@ struct enumerator {
     std::vector<key> new_neighs;
     new_neighs.reserve(neighs.size());
     std::copy_if(neighs.begin(), neighs.end(), std::back_inserter(new_neighs),
-                 // neighbours of both vertices u and v
-                 [this, v](key u) { return B[v][u]; });
+                 [this, v](key u) { return mtx[v].contains(u); });
     return new_neighs;
   }
 
@@ -104,16 +101,18 @@ struct enumerator {
   bool is_clique(const std::vector<key> &clique) const;
 
 private:
-  adjacency_vector V; // Enumertaed vertices
+  // FIXME: refactor this with mc::graph
+  // Enumertaed vertices
+  const;
 
   // Adjacency List for fast neighbourhood deduction
   std::vector<std::vector<key>> A;
-  // Adjacency Matrix for fast edge probing
-  std::vector<std::vector<bool>> B;
+  std::vector<std::pmr::unordered_set<key>> mtx;
 };
 
 // the keys are sorted in non-decreasing order relative to their colours
-class enumerator::sorted_keys { // FIXME: refactor this into a better interface
+// FIXME: refactor this into a better interface
+class enumerator::sorted_keys {
   std::pair<std::vector<key>, std::vector<colour>> keys_colours;
 
 public:

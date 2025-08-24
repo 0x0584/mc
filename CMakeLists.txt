@@ -70,6 +70,8 @@ target_compile_options(${PROJECT_NAME} PRIVATE
   -Wno-gnu-zero-variadic-macro-arguments
   -march=native
   -mtune=native
+  -flto
+  -fvisibility=hidden
 )
 
 set(LOCAL_LIB_DIR "/opt/local/lib")
@@ -99,6 +101,9 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     ${GCC14_INCLUDE_DIR}/backward
   )
 
+  target_compile_options(${PROJECT_NAME} PRIVATE
+    -fno-semantic-interposition
+  )
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
 
   set(LLVM19_ROOT "/opt/local/libexec/llvm-19")
@@ -138,6 +143,7 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
 
   target_compile_options(${PROJECT_NAME} PRIVATE
 	-fexperimental-library
+    -fno-experimental-isel
     $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
   )
 
