@@ -33,7 +33,82 @@
 
 using namespace mc;
 
+void pq_test() {
+  utils::pq<std::string> pq;
+
+  pq.emplace("4");
+  assert(pq.top() == "4");
+
+  pq.emplace("2");
+  assert(pq.top() == "2");
+
+  pq.emplace("1");
+  assert(pq.top() == "1");
+
+  pq.emplace("3");
+  assert(pq.top() == "1");
+
+  pq.pop();
+  assert(pq.top() == "2");
+
+  pq.pop();
+  assert(pq.top() == "3");
+
+  pq.emplace("6");
+  assert(pq.top() == "3");
+
+  pq.emplace("5");
+  assert(pq.top() == "3");
+
+  pq.emplace("7");
+  assert(pq.top() == "3");
+
+  pq.pop();
+  assert(pq.top() == "4");
+
+  pq.emplace("8");
+  assert(pq.top() == "4");
+
+  pq.pop();
+  assert(pq.top() == "5");
+
+  pq.pop();
+  assert(pq.top() == "6");
+
+  pq.emplace("9");
+  assert(pq.top() == "6");
+
+  pq.pop();
+  assert(pq.top() == "7");
+
+  pq.pop();
+  assert(pq.top() == "8");
+
+  pq.pop();
+  assert(pq.top() == "9");
+
+  pq.pop();
+  assert(pq.empty());
+}
+
+void pq_destruct_test() {
+  utils::pq<int> pq;
+
+  for (int i = 0; i < 100; ++i) {
+    pq.push(i);
+  }
+}
+
+void exit_on_signal(int sig) { logger::error("Signal", sig, "is caught!"); }
+
 int main(int argc, char *argv[]) {
+  /* signal(SIGSEGV, exit_on_signal);
+  signal(SIGFPE, exit_on_signal);
+  signal(SIGILL, exit_on_signal);
+  signal(SIGABRT, exit_on_signal);
+  signal(SIGINT, exit_on_signal);
+  signal(SIGTERM, exit_on_signal);
+*/
   std::set_terminate([] {
     try {
       std::rethrow_exception(std::current_exception());
@@ -46,6 +121,10 @@ int main(int argc, char *argv[]) {
     }
     std::abort(); // should never be reached!
   });
+
+  pq_test();
+  pq_destruct_test();
+  return 0;
 
   args::parse(argc, argv);
 
