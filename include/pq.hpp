@@ -6,44 +6,40 @@
 
 namespace utils {
 template <typename T, typename Cmp = std::less<T>> class pq {
-public:
-  ~pq() = default;
-
-  pq(const pq &) = delete;
-  pq(pq &&) = default;
-
-  pq &operator=(const pq &) = delete;
-  pq &operator=(pq &&) = default;
-
-  pq() : pq(Cmp()) {}
-
-  template <typename Comparator>
-  explicit pq(const Comparator &cmp_in) : cmp(cmp_in) {}
-
-private:
-  struct pq_node : std::enable_shared_from_this<pq_node> {
+  struct pq_node {
     pq_node() = default;
 
     pq_node(const pq_node &) = delete;
     pq_node(pq_node &&other) = default;
 
     template <typename... Args>
-    pq_node(Args &&...args) : value_(std::forward<Args>(args)...), degree_(0) {}
+    pq_node(Args &&...args) : value_(std::forward<Args>(args)...) {}
 
-    ~pq_node() = default;
+    ~pq_node() { destruct(child_); }
 
     pq_node &operator=(const pq_node &) = delete;
     pq_node &operator=(pq_node &&other) = default;
 
-    template <typename... Args>
-    static std::shared_ptr<pq_node> construct(Args &&...args) {
-      auto node = memory::make_shared<pq_node>(std::forward<Args>(args)...);
+    template <typename... Args> static pq_node *construct(Args &&...args) {
+      pq_node *node = new pq_node(std::forward<Args>(args)...);
       node->right_ = node;
       node->left_ = node;
       return node;
     }
 
-    bool singleton() const { return this == right_.get(); }
+    static void destruct(pq_node *node) {
+      if (node) {
+        pq_node *walk = node->right_;
+        while (walk != node) {
+          pq_node *tmp = walk;
+          walk = walk->right_;
+          delete tmp;
+        }
+        delete node;
+      }
+    }
+
+    bool singleton() const { return this == right_; }
 
     /**
      * @brief detach the node making it a singlteon.
@@ -55,117 +51,124 @@ private:
       if (singleton()) {
         return;
       }
-      right()->left(left_);
-      left()->right(right_);
-      right_ = this->shared_from_this();
-      left_ = right_;
+      right_->left_ = left_;
+      left_->right_ = right_;
+      left_ = right_ = this;
     }
 
-    void attach(std::shared_ptr<pq_node> node) {
-      if (!node) {
-        return;
+    void attach(pq_node *node) {
+      if (node) {
+        node->left_->right_ = right_;
+        right_->left_ = node->left_;
+        right_ = node;
+        node->left_ = this;
       }
-      right()->left(node->left());
-      node->left()->right(std::move(right()));
-      node->left(this->shared_from_this());
-      right(std::move(node));
     }
 
     void absorb_child() {
-      if (!child_) {
-        return;
+      if (child_) {
+        pq_node *child = child_;
+        child_ = nullptr;
+        attach(child);
       }
-      attach(std::move(child_));
     }
 
-    void adopt_child(std::shared_ptr<pq_node> child) {
-      child->detach();
-      if (!child_) {
-        child_ = std::move(child);
-      } else {
-        child_->attach(std::move(child));
-      }
-      degree_++;
-    }
-
-    void log(const char *str = "") {
-      logger::debug(log_node(str, this->weak_from_this()));
-    }
-
-  private:
-    std::string log_node(const char *str, const std::shared_ptr<pq_node> &ptr) {
-      std::ostringstream oss;
-      oss << str << ptr->degree() << ":[";
-      std::weak_ptr<pq_node> walk = ptr;
-      do {
-        auto walk_ptr = walk.lock();
-        oss << walk_ptr->value().str();
-        if (walk_ptr->child_) {
-          oss << child_->log_node(" (", walk_ptr->child_) << ")";
+    void adopt_child(pq_node *child) {
+      if (child) {
+        degree_++;
+        child->detach();
+        if (child_) {
+          child_->attach(child);
+        } else {
+          child_ = child;
         }
-        walk = walk_ptr->right();
-        if (walk.lock() != ptr)
-          oss << " -> ";
-      } while (walk.lock() != ptr);
+      }
+    }
+
+    void log(const char *str = "") const {
+      logger::debug(log_node(str, this));
+      logger::flush();
+    }
+
+    static std::string log_node(const char *str, const pq_node *ptr) {
+      std::ostringstream oss;
+      oss << str << ptr->degree_ << ":[";
+      const pq_node *walk = ptr;
+      do {
+        oss << walk->value_;
+        if (walk->child_) {
+          oss << log_node(" (", walk->child_) << ")";
+        }
+        walk = walk->right_;
+        if (walk == ptr) {
+          break;
+        }
+        oss << " -> ";
+      } while (true);
       oss << "]";
       return oss.str();
     }
 
-    std::weak_ptr<pq_node> left_;
-    std::shared_ptr<pq_node> child_;
-    std::shared_ptr<pq_node> right_;
     T value_;
-    std::size_t degree_;
-
-  public:
-    const T &value() const { return value_; }
-
-    const std::shared_ptr<pq_node> &right() const { return right_; }
-    void right(std::shared_ptr<pq_node> ptr) { right_ = std::move(ptr); }
-
-    std::shared_ptr<pq_node> left() const { return left_.lock(); }
-    void left(std::weak_ptr<pq_node> ptr) { left_ = std::move(ptr); }
-
-    const std::shared_ptr<pq_node> &child() const { return child_; }
-    void child(std::shared_ptr<pq_node> ptr) { child_ = std::move(ptr); }
-
-    std::size_t degree() const { return degree_; }
+    pq_node *left_ = nullptr;
+    pq_node *child_ = nullptr;
+    pq_node *right_ = nullptr;
+    std::size_t degree_ = 0;
   };
 
+public:
+  pq(const pq &) = delete;
+  pq(pq &&) = default;
+
+  pq &operator=(const pq &) = delete;
+  pq &operator=(pq &&) = default;
+
+  pq() : pq(Cmp()) {}
+
+  ~pq() {
+    if (root) {
+      pq_node::destruct(root);
+    }
+  }
+
+  template <typename Comparator>
+  explicit pq(const Comparator &cmp_in) : cmp(cmp_in) {}
+
+private:
   inline bool compare(const pq_node &a, const pq_node &b) const {
-    return cmp(a.value(), b.value());
+    return cmp(a.value_, b.value_);
   }
 
-  inline bool compare(const std::weak_ptr<pq_node> &a,
-                      const std::weak_ptr<pq_node> &b) const {
-    return compare(a.lock(), b.lock());
-  }
-
-  inline bool compare(const std::shared_ptr<pq_node> &a,
-                      const std::shared_ptr<pq_node> &b) const {
+  inline bool compare(const pq_node *a, const pq_node *b) const {
     assert(a != nullptr, "this should not trigger");
+    if (!a) {
+      throw std::logic_error("cannot compare a nullptr");
+    }
     assert(b != nullptr, "this should not trigger");
+    if (!b) {
+      throw std::logic_error("cannot compare a nullptr");
+    }
     return compare(*a, *b);
   }
 
   const Cmp &cmp;
 
-  std::shared_ptr<pq_node> root;
+  pq_node *root = nullptr;
   std::size_t count = 0;
   static inline constexpr std::uint16_t PQ_HEIGHT_UPPER_BOUND = 64;
-  std::array<std::shared_ptr<pq_node>, PQ_HEIGHT_UPPER_BOUND> subtrees;
+  std::array<pq_node *, PQ_HEIGHT_UPPER_BOUND> subtrees;
 
 public:
   template <typename... Args> void emplace(Args &&...args) {
     count++;
-    auto node = pq_node::construct(std::forward<Args>(args)...);
+    pq_node *node = pq_node::construct(std::forward<Args>(args)...);
     if (root == nullptr) {
-      root = std::move(node);
+      root = node;
     } else {
       if (compare(node, root)) {
         std::swap(root, node);
       }
-      root->attach(std::move(node));
+      root->attach(node);
     }
   }
 
@@ -177,7 +180,7 @@ public:
     if (empty()) {
       throw std::runtime_error("cannot pop an empty priority queue.");
     }
-    return root->value();
+    return root->value_;
   }
 
   void pop() {
@@ -187,27 +190,29 @@ public:
     count--;
     root->absorb_child();
     if (root->singleton()) {
+      delete root;
       root = nullptr;
       return;
     }
-    auto new_root = root->right();
+    pq_node *new_root = root->right_;
     root->detach();
-    root = std::move(new_root);
+    delete root;
+    root = new_root;
     subtrees.fill(nullptr);
     consolidate();
   }
 
 private:
   void consolidate() {
-    std::shared_ptr<pq_node> new_root = root;
-    auto start = root;
+    pq_node *new_root = root;
+
     while (true) {
-      auto d = root->degree();
+      std::size_t d = root->degree_;
       if (d >= PQ_HEIGHT_UPPER_BOUND) {
         throw std::runtime_error("pq grew too much!");
       }
-      auto u = subtrees[d];
-      if (u == start) {
+      pq_node *u = subtrees[d];
+      if (u == root) {
         break;
       } else if (u) {
         subtrees[d] = nullptr;
@@ -215,7 +220,7 @@ private:
         if (compare(root, u)) {
           root->adopt_child(u);
         } else {
-          auto left = root->left();
+          pq_node *left = root->left_;
           root->detach();
           left->attach(u);
           u->adopt_child(root);
@@ -225,11 +230,10 @@ private:
         if (compare(root, new_root)) {
           new_root = root;
         }
-        subtrees[root->degree()] = root;
-        root = root->right();
+        subtrees[root->degree_] = root;
+        root = root->right_;
       }
     }
-
     root = new_root;
   }
 };

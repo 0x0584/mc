@@ -280,6 +280,7 @@ public:
     char **symbols = backtrace_symbols(callstack.data(), frames);
 
     std::ostringstream oss;
+    oss << "\n";
     if (symbols) {
       for (int i = 0; i < frames; ++i) {
         char *demangled_name = nullptr;
@@ -372,7 +373,7 @@ public:
   }
 
   template <typename... Args> static void error(Args &&...args) {
-    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)..., '\n',
+    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...,
                                 stacktrace(), '\n');
     std::exit(EXIT_FAILURE);
   }
