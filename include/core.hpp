@@ -56,6 +56,7 @@
 #include <iomanip>
 #include <iostream>
 #include <list>
+#include <memory_resource>
 #include <mutex>
 #include <ostream>
 #include <queue>
@@ -66,6 +67,7 @@
 
 #include <cxxabi.h>
 #include <execinfo.h>
+#include <type_traits>
 
 std::uint16_t __get_thread_id();
 
@@ -87,38 +89,60 @@ private:
   std::function<void()> callback;
 };
 
-struct gc {
-  gc() : pool(options(), std::pmr::new_delete_resource()) {}
+namespace memory {
+std::pmr::synchronized_pool_resource *pool();
 
-  template <typename T, typename... Args>
-  std::shared_ptr<T> make_shared(Args &&...args) {
-    void *memory = pool.allocate(sizeof(T), alignof(T));
-    T *object = new (memory) T(std::forward<Args>(args)...);
-    auto deleter = [&](T *p) {
-      if (p) {
-        p->~T();
-        pool.deallocate(p, sizeof(T), alignof(T));
-      }
-    };
-    return std::shared_ptr<T>(object, deleter);
+template <typename T, typename... Args>
+inline std::shared_ptr<T> make_shared(Args &&...args) {
+  std::pmr::polymorphic_allocator<T> alloc(pool());
+  return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
+}
+
+template <typename T> struct deleter {
+  inline deleter() noexcept : resource(nullptr) {}
+
+  inline explicit deleter(std::pmr::memory_resource *res) noexcept
+      : resource(res) {}
+
+  inline void operator()(T *p) const {
+    if (p && resource) {
+      std::pmr::polymorphic_allocator<T> alloc(resource);
+      alloc.deallocate(p, 1);
+    }
   }
 
-  template <typename T, typename... Args>
-  std::unique_ptr<T> make_unique(Args &&...args) {
-    void *memory = pool.allocate(sizeof(T), alignof(T));
-    T *object = new (memory) T(std::forward<Args>(args)...);
-    auto deleter = [&](T *p) {
-      if (p) {
-        p->~T();
-        pool.deallocate(p, sizeof(T), alignof(T));
-      }
-    };
-    return std::unique_ptr<T>(object, deleter);
+  inline const std::pmr::memory_resource *get_resource() const {
+    return resource;
   }
 
 private:
+  std::pmr::memory_resource *resource;
+};
+
+template <typename T, typename... Args>
+inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
+  void *memory = pool()->allocate(sizeof(T), alignof(T));
+  T *object = new (memory) T(std::forward<Args>(args)...);
+  return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
+}
+
+struct gc {
+  inline gc() : pool(options(), std::pmr::new_delete_resource()) {}
+
+  inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
+    return std::pmr::polymorphic_allocator<std::byte>(&pool);
+  }
+
+  template <typename T>
+  inline std::pmr::polymorphic_allocator<T> get_allocator() {
+    return std::pmr::polymorphic_allocator<T>(&pool);
+  }
+
+  inline std::pmr::synchronized_pool_resource *get_pool() { return &pool; }
+
+private:
   static std::pmr::pool_options
-  options(std::size_t max_blocks_per_chunk = 4,
+  options(std::size_t max_blocks_per_chunk = 2,
           std::size_t largest_required_pool_block = 256) {
     std::pmr::pool_options opts;
     opts.max_blocks_per_chunk = max_blocks_per_chunk;
@@ -128,6 +152,8 @@ private:
 
   std::pmr::synchronized_pool_resource pool;
 };
+
+} // namespace memory
 
 template <typename T, typename = void> struct is_loggable : std::false_type {};
 
@@ -198,8 +224,24 @@ public:
   }
 
   template <typename Chrono>
-  static inline double duration(Chrono begin, Chrono end) {
-    return std::chrono::duration<double>(end - begin).count();
+  static inline auto duration(Chrono begin, Chrono end) {
+    auto duration_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+            .count();
+    std::ostringstream oss;
+    if (duration_ns < 1000) {
+      oss << duration_ns << " ns";
+    } else if (duration_ns < 1000000) {
+      double duration_us = static_cast<double>(duration_ns) / 1000.0;
+      oss << duration_us << " µs";
+    } else if (duration_ns < 1000000000) {
+      double duration_ms = static_cast<double>(duration_ns) / 1000000.0;
+      oss << duration_ms << " ms";
+    } else {
+      double duration_s = static_cast<double>(duration_ns) / 1000000000.0;
+      oss << duration_s << " s";
+    }
+    return oss.str();
   }
 
   template <typename Chrono>
@@ -208,7 +250,7 @@ public:
     (void)flags;
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3) << std::left;
-    oss << duration(begin, end) << "s";
+    oss << duration(begin, end);
     return oss.str();
   }
 
@@ -219,6 +261,18 @@ public:
     return oss.str();
   }
 
+  static void flush() {
+    {
+      std::scoped_lock queue_lock(queue_mtx);
+      flush_logs = true;
+      logger_cv.notify_one();
+    }
+    {
+      std::unique_lock flush_lock(flush_mtx);
+      flush_cv.wait(flush_lock, [] { return !flush_logs; });
+    }
+  }
+
   static std::string stacktrace() {
     const int max_frames = 128;
     std::vector<void *> callstack(max_frames);
@@ -226,6 +280,7 @@ public:
     char **symbols = backtrace_symbols(callstack.data(), frames);
 
     std::ostringstream oss;
+    oss << "\n";
     if (symbols) {
       for (int i = 0; i < frames; ++i) {
         char *demangled_name = nullptr;
@@ -279,6 +334,8 @@ public:
 
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
+    static_assert((is_loggable<std::decay_t<Args>>::value && ...),
+                  "operator<< overload missing.");
     if constexpr (Level <= current_level) {
       auto now = std::chrono::system_clock::now();
 
@@ -316,7 +373,7 @@ public:
   }
 
   template <typename... Args> static void error(Args &&...args) {
-    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)..., '\n',
+    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...,
                                 stacktrace(), '\n');
     std::exit(EXIT_FAILURE);
   }
@@ -512,6 +569,26 @@ private:
   bool pool_is_full = false;
 };
 } // namespace thread
+
+struct scope_timer {
+  explicit inline scope_timer(const char *msg)
+      : callback([msg = std::move(msg),
+                  start = std::chrono::high_resolution_clock::now()] {
+          auto end = std::chrono::high_resolution_clock::now();
+          logger::warn(std::move(msg), logger::time_diff(start, end));
+        }) {}
+
+private:
+  scope_dtor callback;
+};
+
+// #ifndef NDEBUG
+// #define make_scope_timer(x) scope_timer x(#x)
+// #else
+#define make_scope_timer(x)                                                    \
+  do {                                                                         \
+  } while (0)
+// #endif
 
 // FIXME: turn logger into a class
 
