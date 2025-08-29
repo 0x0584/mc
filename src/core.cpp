@@ -24,6 +24,13 @@ std::uint16_t __get_thread_id() {
   return __thread_id;
 }
 
+namespace memory {
+std::pmr::synchronized_pool_resource *pool() {
+  thread_local gc mem;
+  return mem.get_pool();
+}
+} // namespace memory
+
 scope_dtor logger::setup_logger() {
   std::cout << std::fixed << std::setprecision(3) << std::left;
   std::cerr << std::fixed << std::setprecision(3) << std::left;
@@ -70,14 +77,16 @@ scope_dtor logger::setup_logger() {
         log_processing.pop_front();
         print_log_id++;
       }
-
-      std::scoped_lock print_lock(print_mtx);
-      std::cerr << std::move(oss.str());
-
-      if (std::scoped_lock flush_lock(flush_mtx);
-          flush_logs && log_processing.empty()) {
-        flush_logs = false;
-        flush_cv.notify_one();
+      {
+        std::scoped_lock print_lock(print_mtx);
+        std::cerr << std::move(oss.str());
+      }
+      {
+        std::scoped_lock flush_lock(flush_mtx);
+        if (flush_logs && log_processing.empty()) {
+          flush_logs = false;
+          flush_cv.notify_one();
+        }
       }
     }
     std::cerr << "Logging finished at " << std::chrono::system_clock::now()
