@@ -20,6 +20,18 @@ template <typename T, typename Cmp = std::less<T>> class pq {
     pq_node &operator=(const pq_node &) = delete;
     pq_node &operator=(pq_node &&other) = default;
 
+    static void *operator new(std::size_t sz) {
+      return memory::pool()->allocate(sz, alignof(pq_node));
+    }
+
+    static void operator delete(void *ptr) noexcept {
+      memory::pool()->deallocate(ptr, sizeof(pq_node), alignof(pq_node));
+    }
+
+    static void operator delete(void *ptr, std::size_t sz) noexcept {
+      memory::pool()->deallocate(ptr, sz, alignof(pq_node));
+    }
+
     template <typename... Args> static pq_node *construct(Args &&...args) {
       pq_node *node = new pq_node(std::forward<Args>(args)...);
       node->right_ = node;
@@ -41,12 +53,6 @@ template <typename T, typename Cmp = std::less<T>> class pq {
 
     bool singleton() const { return this == right_; }
 
-    /**
-     * @brief detach the node making it a singlteon.
-     *
-     * @note does not affect the child.
-     * @note resets the parent
-     */
     void detach() {
       if (singleton()) {
         return;
@@ -58,18 +64,20 @@ template <typename T, typename Cmp = std::less<T>> class pq {
 
     void attach(pq_node *node) {
       if (node) {
-        node->left_->right_ = right_;
-        right_->left_ = node->left_;
-        right_ = node;
-        node->left_ = this;
+        pq_node *node_head = node;
+        pq_node *node_tail = node->left_;
+        left_->right_ = node_head;
+        node_head->left_ = left_;
+        node_tail->right_ = this;
+        left_ = node_tail;
       }
     }
 
     void absorb_child() {
       if (child_) {
-        pq_node *child = child_;
+        attach(child_);
         child_ = nullptr;
-        attach(child);
+        degree_--;
       }
     }
 
@@ -92,10 +100,10 @@ template <typename T, typename Cmp = std::less<T>> class pq {
 
     static std::string log_node(const char *str, const pq_node *ptr) {
       std::ostringstream oss;
-      oss << str << ptr->degree_ << ":[";
+      oss << str << "[";
       const pq_node *walk = ptr;
       do {
-        oss << walk->value_;
+        oss << walk->value_ << ":" << walk->degree_;
         if (walk->child_) {
           oss << log_node(" (", walk->child_) << ")";
         }
@@ -132,7 +140,9 @@ public:
   }
 
   template <typename Comparator>
-  explicit pq(const Comparator &cmp_in) : cmp(cmp_in) {}
+  explicit pq(const Comparator &cmp_in) : cmp(cmp_in) {
+    subtrees.fill(nullptr);
+  }
 
 private:
   inline bool compare(const pq_node &a, const pq_node &b) const {
@@ -140,11 +150,9 @@ private:
   }
 
   inline bool compare(const pq_node *a, const pq_node *b) const {
-    assert(a != nullptr, "this should not trigger");
     if (!a) {
       throw std::logic_error("cannot compare a nullptr");
     }
-    assert(b != nullptr, "this should not trigger");
     if (!b) {
       throw std::logic_error("cannot compare a nullptr");
     }
@@ -155,7 +163,7 @@ private:
 
   pq_node *root = nullptr;
   std::size_t count = 0;
-  static inline constexpr std::uint16_t PQ_HEIGHT_UPPER_BOUND = 64;
+  static inline constexpr std::uint16_t PQ_HEIGHT_UPPER_BOUND = 128;
   std::array<pq_node *, PQ_HEIGHT_UPPER_BOUND> subtrees;
 
 public:
@@ -176,12 +184,21 @@ public:
 
   bool empty() const { return root == nullptr; }
 
+  std::size_t size() const { return count; }
+
   const T &top() const {
     if (empty()) {
-      throw std::runtime_error("cannot pop an empty priority queue.");
+      throw std::runtime_error("cannot get top of an empty priority queue.");
     }
     return root->value_;
   }
+
+  // void log_root(const char *str) const {
+  //   if (root)
+  //     root->log(str);
+  //   else
+  //     logger::warn(str, "logging an empty root!");
+  // }
 
   void pop() {
     if (empty()) {
@@ -198,43 +215,56 @@ public:
     root->detach();
     delete root;
     root = new_root;
-    subtrees.fill(nullptr);
     consolidate();
   }
 
 private:
   void consolidate() {
-    pq_node *new_root = root;
+    pq_node sentinel;
+    sentinel.left_ = root->left_;
+    sentinel.right_ = root;
+    sentinel.left_->right_ = &sentinel;
+    sentinel.right_->left_ = &sentinel;
 
-    while (true) {
-      std::size_t d = root->degree_;
-      if (d >= PQ_HEIGHT_UPPER_BOUND) {
-        throw std::runtime_error("pq grew too much!");
-      }
-      pq_node *u = subtrees[d];
-      if (u == root) {
-        break;
-      } else if (u) {
+    pq_node *walk = sentinel.right_;
+    do {
+      pq_node *current = walk;
+      walk = walk->right_;
+
+      current->detach();
+
+      std::size_t d = current->degree_;
+      while (subtrees[d]) {
+        pq_node *other = subtrees[d];
         subtrees[d] = nullptr;
-        u->detach();
-        if (compare(root, u)) {
-          root->adopt_child(u);
+        if (compare(current, other)) {
+          current->adopt_child(other);
         } else {
-          pq_node *left = root->left_;
-          root->detach();
-          left->attach(u);
-          u->adopt_child(root);
-          root = u;
+          other->adopt_child(current);
+          current = other;
         }
-      } else {
-        if (compare(root, new_root)) {
-          new_root = root;
-        }
-        subtrees[root->degree_] = root;
-        root = root->right_;
+        d++;
       }
+
+      subtrees[d] = current;
+    } while (walk != &sentinel);
+
+    sentinel.detach();
+
+    root = nullptr;
+    for (pq_node *&node : subtrees) {
+      if (!node)
+        continue;
+      if (!root) {
+        root = node;
+        root->left_ = root->right_ = node;
+      } else {
+        root->attach(node);
+        if (compare(node, root))
+          root = node;
+      }
+      node = nullptr;
     }
-    root = new_root;
   }
 };
 } // namespace utils
