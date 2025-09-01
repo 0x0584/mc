@@ -84,16 +84,16 @@ int main(int argc, char *argv[]) {
   graph_builder builder(in);
   graph g = builder.build(args::undirected);
 
-  auto start = std::chrono::system_clock::now();
+  // auto start = std::chrono::system_clock::now();
 
-  profiler_start("colour.prof");
-  auto cols = g.colour_sort(gen_keys(g.vertex_count()));
-  profiler_stop();
+  // profiler_start("colour.prof");
+  // auto cols = g.colour_sort(gen_keys(g.vertex_count()));
+  // profiler_stop();
 
-  auto end = std::chrono::system_clock::now();
-  logger::warn("dsatur done in", logger::time_diff(start, end));
+  // auto end = std::chrono::system_clock::now();
+  // logger::warn("dsatur done in", logger::time_diff(start, end));
 
-  return 42;
+  // return 42;
 
   multithreaded algo(g);
   for (long turn = 1; turn <= args::num_turns; ++turn) {

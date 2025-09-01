@@ -30,6 +30,7 @@
 #include <numeric>
 #include <unordered_set>
 
+#include "core.hpp"
 #include "mc.hpp"
 #include "profiler.hpp"
 
@@ -152,6 +153,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
     branches.exec([i, &abort_search, &algo, &branches, &old_max_clique_size,
                    &upper_bound, &total_branches, &total_cache_hits, &keys,
                    this](std::uint16_t) mutable {
+      make_scope_timer(branch_timer);
       if (abort_search || upper_bound_reached) {
         return;
       }
@@ -183,6 +185,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
       std::pair<std::pmr::vector<graph::key>, std::pmr::vector<mc::colour>>
           sorted_neighs;
       {
+        // make_scope_timer(sorted_neighs_timer);
         std::pmr::unordered_set<graph::key> all_neighs = G.neighbours(key);
         // XXX: use iterator instead to avoid blocking threads
         for (auto j = keys.first.size() - 1; j > i; --j) {

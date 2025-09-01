@@ -583,11 +583,10 @@ private:
 };
 
 // #ifndef NDEBUG
-// #define make_scope_timer(x) scope_timer x(#x)
+#define make_scope_timer(x) scope_timer x(#x)
 // #else
-#define make_scope_timer(x)                                                    \
-  do {                                                                         \
-  } while (0)
+// #define make_scope_timer(x) \
+//   do { \ } while (0)
 // #endif
 
 // FIXME: turn logger into a class

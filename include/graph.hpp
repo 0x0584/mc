@@ -162,7 +162,7 @@ struct graph {
 
   std::pair<std::pmr::vector<key>, std::pmr::vector<colour>>
   colour_sort(const std::pmr::vector<key> &neighs) const {
-    make_scope_timer(colour_sort_timer);
+    // make_scope_timer(colour_sort_timer);
 
     // TODO: use thread local vector instead
     thread_local std::pmr::vector<colour> colours(vertex_count(),
@@ -176,21 +176,22 @@ struct graph {
     thread_local utils::pq<std::size_t, decltype(sort_keys)> q(sort_keys);
 
     {
-      make_scope_timer(setup_timer);
+      // make_scope_timer(setup_timer);
       std::fill(colours.begin(), colours.end(), colour());
       std::fill(saturation.begin(), saturation.end(), 0);
     }
     {
-      make_scope_timer(queue_emplace_timer);
+      // make_scope_timer(queue_emplace_timer);
       for (key u : neighs) {
         q.emplace(u);
       }
     }
 
-    std::pmr::vector<std::pair<key, colour>> sorted(neighs.size(),
-                                                    memory::pool());
-
+    std::pmr::vector<std::pair<key, colour>> sorted(memory::pool());
+    sorted.reserve(neighs.size());
+    std::size_t sz = 0;
     while (!q.empty()) {
+      sz++;
       key u = q.top();
 
       std::pmr::vector<bool> used_colours(A[u].size() + 1, memory::pool());
@@ -205,8 +206,8 @@ struct graph {
         ++col;
       }
       colours[u] = col;
-
       sorted.emplace_back(u, col);
+      // logger::warn("max colour", col);
 
       // for (key v : A[u]) {
       //   if (colours[v].is_nil()) {
@@ -236,13 +237,18 @@ struct graph {
       }
 
       {
-        make_scope_timer(pop_timer);
+        // make_scope_timer(pop_timer);
         q.pop();
       }
     }
 
+    if (sz != neighs.size()) {
+      std::ostringstream oss;
+      oss << "FUCKED UP " << sz << " " << neighs.size();
+      throw std::runtime_error(oss.str());
+    }
     {
-      make_scope_timer(sort_timer);
+      // make_scope_timer(sort_timer);
       std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) {
         return a.second < b.second;
       });
@@ -253,13 +259,16 @@ struct graph {
     cols.reserve(sorted.size());
 
     {
-      make_scope_timer(copy_timer);
+      // make_scope_timer(copy_timer);
       for (auto &[key, colour] : sorted) {
+        // logger::warn("in loop max colour", colour);
+
         keys.emplace_back(std::move(key));
-        cols.emplace_back(std::move(colour));
+        cols.emplace_back(colour);
       }
     }
 
+    // logger::warn("final max colour", cols.back());
     return std::make_pair(std::move(keys), std::move(cols));
   }
 
