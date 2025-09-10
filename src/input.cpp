@@ -1,13 +1,14 @@
 #include "input.hpp"
 #include "core.hpp"
 
+#include <cstring>
+
 namespace mc {
 std::uint16_t args::num_threads = thread::num_available_threads;
 
 void args::parse(int argc, char *argv[]) {
   num_threads = thread::num_available_threads;
-  logger::warn(thread::num_available_threads);
-  for (int ch; (ch = getopt(argc, argv, "r:i:s:u:l:deyh")) != -1;) {
+  for (int ch; (ch = getopt(argc, argv, "t:r:i:s:u:l:deyh")) != -1;) {
     switch (ch) {
     case 'r':
       num_turns = std::max(1l, std::atol(optarg));
@@ -71,7 +72,7 @@ void args::parse(int argc, char *argv[]) {
     }
   }
 
-  logger::info("Running", args::exec_mode);
+  logger::info("Running", exec_mode, "with", num_threads, "Threads");
 
   if (stdin) {
     logger::info("Reading from STDIN");
@@ -80,30 +81,71 @@ void args::parse(int argc, char *argv[]) {
   }
 }
 
-std::string feed::read_chunk() {
-  buffer buff;
-  const auto size_remaining = std::distance(remaining.begin(), tail_remaining);
-  std::move(remaining.begin(), tail_remaining, buff.data());
+static inline char const *last_delimiter(char const *__restrict base,
+                                         char const *__restrict tail) noexcept {
+#define STRINGIFY(x) #x
+#define PRAGMA_UNROLL(x) _Pragma(STRINGIFY(unroll x))
+#define BLOCK_SCAN(BLOCK_SIZE)                                                 \
+  do {                                                                         \
+    if ((tail - base) >= BLOCK_SIZE) {                                         \
+      tail -= BLOCK_SIZE;                                                      \
+      PRAGMA_UNROLL(BLOCK_SIZE)                                                \
+      for (int i = BLOCK_SIZE - 1; i >= 0; --i) {                              \
+        if (tail[i] == feed::deli)                                             \
+          return tail + i;                                                     \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
 
-  auto read = read_next(CHUNK_SIZE - size_remaining);
-  auto begin_read = read.first.begin();
-  const auto size_read = read.second;
-  std::move(begin_read, begin_read + size_read, buff.data() + size_remaining);
+  BLOCK_SCAN(32);
+  BLOCK_SCAN(16);
+  BLOCK_SCAN(8);
 
-  const auto tail_buff = buff.begin() + (size_remaining + size_read);
-  auto delimiter = tail_buff;
-  while (delimiter != buff.begin() && *--delimiter != feed::deli)
-    ;
-  if (delimiter == buff.begin()) {
-    logger::error("FAILURE: chunk_size=", CHUNK_SIZE,
-                  " exceeded! recompile with a bigger size");
+  while (tail != base) {
+    --tail;
+    if (*tail == feed::deli)
+      return tail;
   }
 
-  const auto buffer_size =
-      static_cast<std::size_t>(std::distance(buff.begin(), delimiter++));
-  std::move(delimiter, tail_buff, remaining.data());
-  tail_remaining = remaining.begin() + std::distance(delimiter, tail_buff);
+  return nullptr;
+#undef STRINGIFY
+#undef PRAGMA_UNROLL
+#undef BLOCK_SCAN
+}
 
-  return std::string{std::move(buff.data()), buffer_size};
+feed::buffer_content feed::read_chunk() {
+  buffer_content chunk;
+  char *base = chunk.buff.data();
+
+  std::size_t total_sz = static_cast<std::size_t>(tail_rem - begin_rem);
+  if (total_sz) {
+    std::memcpy(base, begin_rem, total_sz);
+  }
+
+  const std::size_t to_read = CHUNK_SIZE - total_sz;
+  in->read(base + total_sz, static_cast<std::streamsize>(to_read));
+  if (in->bad()) [[unlikely]] {
+    logger::error("FAILURE: cannot read from stream");
+  }
+
+  const std::size_t size_read = static_cast<std::size_t>(in->gcount());
+  total_sz += size_read;
+
+  char *tail = base + total_sz;
+  char const *deli = last_delimiter(base, tail);
+  if (!deli) {
+    logger::error("FAILURE: chunk_size exceeded! recompile with a bigger size");
+  }
+
+  chunk.size = static_cast<std::size_t>(deli - base);
+
+  const char *after_nl = (deli < tail) ? deli + 1 : tail;
+  const std::size_t spill = static_cast<std::size_t>(tail - after_nl);
+  if (spill) {
+    std::memcpy(begin_rem, after_nl, spill);
+  }
+  tail_rem = begin_rem + spill;
+
+  return chunk;
 }
 } // namespace mc

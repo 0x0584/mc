@@ -4,6 +4,7 @@ project(max-clique CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
+# set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Generate a compilation database for IDEs" FORCE)
 
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose build type" FORCE)
@@ -14,12 +15,22 @@ message(STATUS "Using C++ Standard ${CMAKE_CXX_STANDARD}")
 
 add_executable(${PROJECT_NAME})
 add_custom_command(
-  TARGET ${PROJECT_NAME} POST_BUILD
+  TARGET ${PROJECT_NAME}
+  POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E create_symlink
   "$<TARGET_FILE:${PROJECT_NAME}>"
-  "${CMAKE_SOURCE_DIR}/${PROJECT_NAME}"
+  "${CMAKE_SOURCE_DIR}/${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
   COMMENT "Creating symlink for ${PROJECT_NAME} in source directory"
 )
+
+# add_custom_target(copy_compile_commands
+#   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#   "${CMAKE_BINARY_DIR}/compile_commands.json"
+#   "${CMAKE_SOURCE_DIR}/compile_commands.json"
+#   COMMENT "Copying compile_commands.json to the source directory"
+# )
+# add_dependencies(${PROJECT_NAME} copy_compile_commands)
+
 
 add_subdirectory(src)
 
@@ -70,9 +81,20 @@ target_compile_options(${PROJECT_NAME} PRIVATE
   -Wno-gnu-zero-variadic-macro-arguments
   -march=native
   -mtune=native
-  -flto
-  -fvisibility=hidden
 )
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+  target_compile_options(${PROJECT_NAME} PRIVATE
+    # -funroll-loops
+    -ffast-math
+    -fstrict-aliasing
+    -fvisibility=hidden
+    -flto
+  )
+  target_link_options(${PROJECT_NAME} PRIVATE
+    -fno-semantic-interposition
+  )
+endif()
 
 set(LOCAL_LIB_DIR "/opt/local/lib")
 set(LOCAL_EXEC_DIR "/opt/local/libexec")
@@ -100,10 +122,23 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     ${GCC14_INCLUDE_DIR}/x86_64-apple-darwin19
     ${GCC14_INCLUDE_DIR}/backward
   )
-
   target_compile_options(${PROJECT_NAME} PRIVATE
-    -fno-semantic-interposition
+	-fopt-info-loop  
   )
+  if (CMAKE_BUILD_TYPE STREQUAL "Release")
+	target_compile_options(${PROJECT_NAME} PRIVATE
+      -fno-plt
+	)
+  endif()
+
+  if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+	target_compile_options(${PROJECT_NAME} PRIVATE
+      -fopt-info-vec
+      -fopt-info-missed
+      -fopt-info-optimized
+	)
+  endif()
+
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
 
   set(LLVM19_ROOT "/opt/local/libexec/llvm-19")
@@ -137,7 +172,7 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
 	set(SANITIZER_FLAGS "")
   endif()
 
-  if(NOT SANITIZER_FLAGS STREQUAL "")
+  if(NOT SANITIZER_FLAGS STREQUAL "" AND CMAKE_BUILD_TYPE STREQUAL Debug)
 	message(STATUS "Sanitizer enabled ${SANITIZE}")
   endif()
 
@@ -146,6 +181,25 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     -fno-experimental-isel
     $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
   )
+
+  # if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  # 	target_compile_options(${PROJECT_NAME} PRIVATE
+  # 	)
+  # endif()
+
+  if (CMAKE_BUILD_TYPE STREQUAL "Release")
+	target_compile_options(${PROJECT_NAME} PRIVATE
+	  # -Rpass=loop-unroll
+	  # -Rpass-missed=loop-unroll
+	  # -Rpass-analysis=loop-unroll		  
+      # -Rpass=loop-vectorize
+      # -Rpass-missed=loop-vectorize
+      # -Rpass-analysis=loop-vectorize	
+      -fslp-vectorize
+      -ffp-contract=fast
+      -fno-rtti
+	)
+  endif()
 
   target_link_libraries(${PROJECT_NAME} PRIVATE
     c++
@@ -180,4 +234,4 @@ endif()
 message(STATUS "Log Level is set to ${LOG_LEVEL}")
 message(STATUS "Threads per core are set to ${THREADS_PER_CORE}")
 
-include(tests.cmake)
+#include(tests.cmake)

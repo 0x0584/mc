@@ -173,6 +173,13 @@ struct is_all_movable_helper<Head, Tail...>
 template <typename... Args>
 inline constexpr bool is_all_movable_v = is_all_movable_helper<Args...>::value;
 
+namespace std {
+template <typename T, typename U>
+inline ostream &operator<<(ostream &oss, const pair<T, U> &p) {
+  return oss << "{" << p.first << ", " << p.second << "}";
+}
+} // namespace std
+
 struct logger {
   enum class log_level : unsigned {
     off = 0,
@@ -229,19 +236,62 @@ public:
         std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
             .count();
     std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3) << std::left;
     if (duration_ns < 1000) {
       oss << duration_ns << " ns";
-    } else if (duration_ns < 1000000) {
+    } else if (duration_ns < 1'000'000) {
       double duration_us = static_cast<double>(duration_ns) / 1000.0;
       oss << duration_us << " µs";
-    } else if (duration_ns < 1000000000) {
-      double duration_ms = static_cast<double>(duration_ns) / 1000000.0;
+    } else if (duration_ns < 1'000'000'000) {
+      double duration_ms = static_cast<double>(duration_ns) / 1'000'000.0;
       oss << duration_ms << " ms";
     } else {
-      double duration_s = static_cast<double>(duration_ns) / 1000000000.0;
+      double duration_s = static_cast<double>(duration_ns) / 1'000'000'000.0;
       oss << duration_s << " s";
     }
     return oss.str();
+  }
+
+  template <typename Units, typename Value>
+  static inline std::string scale(Value val, double scale_factor,
+                                  const Units &units) {
+    unsigned unit_index = 0;
+    double d_val = static_cast<double>(val);
+    while (d_val >= scale_factor && unit_index < units.size() - 1) {
+      d_val /= scale_factor;
+      unit_index++;
+    }
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3) << std::left << d_val << " "
+        << units[unit_index];
+    return oss.str();
+  }
+
+  static inline std::string number_unit(std::size_t val) {
+    if (val < 1000)
+      return std::to_string(val);
+    const std::vector<char> units = {'?', 'K', 'M', 'B', 'T'};
+    const double scale_factor = 1000.0;
+    return scale(val, scale_factor, units);
+  }
+
+  static inline std::string size_unit(std::size_t val) {
+    const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
+    const double scale_factor = 1024.0;
+    return scale(val, scale_factor, units);
+  }
+
+  static inline std::string throughput(double throu) {
+    const std::vector<std::string> units = {"/s", "K/s", "M/s", "B/s", "T/s"};
+    const double scale_factor = 1000.0;
+    return scale(throu, scale_factor, units);
+  }
+
+  template <typename SizeType, typename Chrono>
+  static inline std::string throughput(Chrono begin, Chrono end,
+                                       SizeType count) {
+    return throughput(count /
+                      std::chrono::duration<double>(end - begin).count());
   }
 
   template <typename Chrono>
@@ -466,15 +516,12 @@ template <> struct equal_to<logger::log_entry> {
 };
 } // namespace std
 
-#ifdef assert
-#undef assert
-#endif
 #ifdef NDEBUG
-#define assert(cond, ...) ((void)0)
+#define Assert(cond, ...) ((void)0)
 #else
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
-#define assert(cond, ...)                                                      \
+#define Assert(cond, ...)                                                      \
   ((void)(cond ? ((void)0)                                                     \
                : logger::error(#cond, "failed, hint:", ##__VA_ARGS__, "in",    \
                                __func__, "at",                                 \
@@ -492,8 +539,8 @@ struct pool {
   pool(pool &&) = delete;
 
   explicit pool(std::uint16_t pool_size) {
-    assert(pool_size > 0, "pool size cannot be 0");
-    assert(pool_size <= thread::num_available_threads, "pool size", pool_size,
+    Assert(pool_size > 0, "pool size cannot be 0");
+    Assert(pool_size <= thread::num_available_threads, "pool size", pool_size,
            "is greater than available threads", num_available_threads);
     _pool.resize(pool_size);
     for (std::uint16_t task_id = 0; task_id < _pool.size(); ++task_id) {
@@ -507,6 +554,8 @@ struct pool {
 
   pool &operator=(const pool &) = delete;
   pool &operator=(pool &&) = delete;
+
+  std::size_t size() const { return _pool.size(); }
 
   void exec(Task &&task) {
     std::uint16_t task_id;

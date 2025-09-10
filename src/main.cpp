@@ -26,26 +26,26 @@
 #include "profiler.hpp"
 
 #include "graph.hpp"
-#include "mc.hpp"
+// #include "mc.hpp"
 
 using namespace mc;
 
-auto gen_keys(auto size) {
-  std::pmr::vector<graph::key> keys(size);
-  std::iota(keys.begin(), keys.end(), 0);
-  logger::debug("V=", keys.size());
-  return keys;
-}
+// auto gen_keys(auto size) {
+//   std::pmr::vector<graph::key> keys(size);
+//   std::iota(keys.begin(), keys.end(), 0);
+//   logger::debug("V=", keys.size());
+//   return keys;
+// }
 
-void print(const char *s, auto &key_cols) {
-  std::ostringstream oss;
-  oss << "using " << s << " " << key_cols.size() << " ";
-  for (auto [k, col] : key_cols) {
-    oss << k << "=" << col << " ";
-  }
-  logger::debug(oss.str());
-  logger::warn(s, key_cols.highest_colour());
-}
+// void print(const char *s, auto &key_cols) {
+//   std::ostringstream oss;
+//   oss << "using " << s << " " << key_cols.size() << " ";
+//   for (auto [k, col] : key_cols) {
+//     oss << k << "=" << col << " ";
+//   }
+//   logger::debug(oss.str());
+//   logger::warn(s, key_cols.highest_colour());
+// }
 
 // void is_valid_colouring(const char *str, auto &key_cols, const graph &g) {
 //   std::pmr::unordered_map<graph::key, mc::colour> ktoc(
@@ -82,7 +82,10 @@ int main(int argc, char *argv[]) {
 
   input in;
   graph_builder builder(in);
+  profiler_start("graph.prof");
   graph g = builder.build(args::undirected);
+  profiler_stop();
+  // g.print();
 
   // auto start = std::chrono::system_clock::now();
 
@@ -95,28 +98,28 @@ int main(int argc, char *argv[]) {
 
   // return 42;
 
-  multithreaded algo(g);
-  for (long turn = 1; turn <= args::num_turns; ++turn) {
-    if (args::num_turns != 1) {
-      logger::info("Turn", turn, "/", args::num_turns);
-    }
+  // multithreaded algo(g);
+  // for (long turn = 1; turn <= args::num_turns; ++turn) {
+  //   if (args::num_turns != 1) {
+  //     logger::info("Turn", turn, "/", args::num_turns);
+  //   }
 
-    auto clique = algo.solve(args::exec_mode);
-    std::pmr::vector<vertex> sorted_clique(clique.cbegin(), clique.cend(),
-                                           memory::pool());
-    std::sort(sorted_clique.begin(), sorted_clique.end());
-    std::ostringstream oss;
-    oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
-    for (vertex v : sorted_clique) {
-      oss << v << " ";
-    }
-    oss << "}";
-    logger::print(oss.str());
+  //   auto clique = algo.solve(args::exec_mode);
+  //   std::pmr::vector<vertex> sorted_clique(clique.cbegin(), clique.cend(),
+  //                                          memory::pool());
+  //   std::sort(sorted_clique.begin(), sorted_clique.end());
+  //   std::ostringstream oss;
+  //   oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
+  //   for (vertex v : sorted_clique) {
+  //     oss << v << " ";
+  //   }
+  //   oss << "}";
+  //   logger::print(oss.str());
 
-    if (args::draw) {
-      algo.draw(clique);
-    }
-  }
+  //   if (args::draw) {
+  //     algo.draw(clique);
+  //   }
+  // }
 
   return EXIT_SUCCESS;
 }
