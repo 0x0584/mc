@@ -80,7 +80,7 @@ struct lru_cache {
                                             key_hash, key_equal>;
   explicit lru_cache(std::size_t capacity)
       : _capacity(capacity), keys(&buff), store(&buff) {
-    assert(capacity > 0, "cache capacity cannot be 0");
+    Assert(capacity > 0, "cache capacity cannot be 0");
     logger::debug("Cache capacity is", capacity);
     keys.reserve(capacity);
   }

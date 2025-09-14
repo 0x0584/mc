@@ -196,7 +196,8 @@ struct logger {
   struct log_entry;
 
 private:
-  static inline std::mutex print_mtx;
+  static inline std::mutex stderr_mtx;
+  static inline std::mutex stdout_mtx;
   static inline std::mutex log_id_mtx;
   static inline std::size_t print_log_id = 1;
 
@@ -381,6 +382,9 @@ public:
     oss << COL_RESET << '\n';
     return oss.str();
   }
+  static inline void puts(const std::string &s, auto strm) {
+    std::fputs(s.c_str(), strm);
+  }
 
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
@@ -431,39 +435,15 @@ public:
   template <typename... Args> static void print(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
-
-    std::function<std::string()> message;
-    if constexpr (is_all_movable_v<Args...>) {
-      message = [... log_args_captured = std::forward<Args>(log_args)] {
-        return process_print_message(log_args_captured...);
-      };
-    } else {
-      std::string processed_msg =
-          process_print_message(std::forward<Args>(log_args)...);
-      message = [msg = std::move(processed_msg)] { return msg; };
-    }
-
-    std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(std::move(message));
+    std::scoped_lock lk(stdout_mtx);
+    puts(process_print_message(std::forward<Args>(log_args)...), stdout);
   }
 
   template <typename... Args> static void printv(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
-
-    std::function<std::string()> message;
-    if constexpr (is_all_movable_v<Args...>) {
-      message = [... log_args_captured = std::forward<Args>(log_args)] {
-        return process_print_message(log_args_captured...);
-      };
-    } else {
-      std::string processed_msg =
-          process_print_message(std::forward<Args>(log_args)...);
-      message = [msg = std::move(processed_msg)] { return msg; };
-    }
-
-    std::scoped_lock lock(queue_mtx);
-    log_queue.emplace_back(std::move(message));
+    std::scoped_lock lk(stdout_mtx);
+    puts(process_printv_message(std::forward<Args>(log_args)...), stdout);
   }
 
   static inline const auto logger_destoy = logger::setup_logger();

@@ -251,7 +251,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
           logger::debug(oss.str());
         }
 
-        assert(clique.size() == overall_size);
+        Assert(clique.size() == overall_size);
         max_clique = std::move(clique);
       }
 

@@ -51,13 +51,13 @@ struct enumerator {
   inline std::size_t vertex_count() const { return V.size(); }
 
   inline graph::vertex key_to_vertex(std::size_t index) const {
-    assert(index < vertex_count());
+    Assert(index < vertex_count());
     return V[index].first;
   }
 
   inline std::vector<key> neighbourhood(key v,
                                         const std::vector<key> &neighs) const {
-    assert(v < vertex_count());
+    Assert(v < vertex_count());
     std::vector<key> new_neighs;
     new_neighs.reserve(neighs.size());
     std::copy_if(neighs.begin(), neighs.end(), std::back_inserter(new_neighs),
@@ -67,7 +67,7 @@ struct enumerator {
 
   inline std::vector<key>
   neighbours(key v, std::pmr::unordered_set<key> pruned) const {
-    assert(v < vertex_count());
+    Assert(v < vertex_count());
     std::vector<key> neighs;
     neighs.reserve(A.at(v).size());
     std::copy_if(A.at(v).begin(), A.at(v).end(), std::back_inserter(neighs),
@@ -80,7 +80,7 @@ struct enumerator {
     std::vector<graph::vertex> vertices(keys.size());
     std::transform(std::execution::par_unseq, keys.begin(), keys.end(),
                    vertices.begin(), [this](key v) {
-                     assert(v < vertex_count());
+                     Assert(v < vertex_count());
                      return key_to_vertex(v);
                    });
     return vertices;

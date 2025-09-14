@@ -116,7 +116,7 @@ enumerator::sorted_keys enumerator::greedy_colour_sort(
 // TODO use dynamic colouring instead
 enumerator::sorted_keys
 enumerator::greedy_colour_sort(std::vector<key> &&vertices) const {
-  assert(not vertices.empty());
+  Assert(not vertices.empty());
 
   logger::warn("greedy start");
   auto start = std::chrono::system_clock::now();
