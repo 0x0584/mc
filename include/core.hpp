@@ -20,32 +20,6 @@
 #ifndef CORE_HPP
 #define CORE_HPP
 
-#define COL_RESET "\x1b[0m"
-#define COL_BOLD "\x1b[1m"
-#define COL_FAINT "\x1b[2m"
-#define COL_ITALIC "\x1b[3m"
-#define COL_UNDERLINE "\x1b[4m"
-
-#define COL_BLACK "\x1b[30m"
-#define COL_RED "\x1b[31m"
-#define COL_GREEN "\x1b[32m"
-#define COL_YELLOW "\x1b[33m"
-#define COL_BLUE "\x1b[34m"
-#define COL_MAGENTA "\x1b[35m"
-#define COL_CYAN "\x1b[36m"
-#define COL_WHITE "\x1b[37m"
-#define COL_DEFAULT_FG "\x1b[39m"
-
-#define BG_BLACK "\x1b[40m"
-#define BG_RED "\x1b[41m"
-#define BG_GREEN "\x1b[42m"
-#define BG_YELLOW "\x1b[43m"
-#define BG_BLUE "\x1b[44m"
-#define BG_MAGENTA "\x1b[45m"
-#define BG_CYAN "\x1b[46m"
-#define BG_WHITE "\x1b[47m"
-#define BG_DEFAULT_BG "\x1b[49m"
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -71,9 +45,12 @@
 
 std::uint16_t __get_thread_id();
 
+// TODO: create utils namespace
+
 // since the thread can return on several conditions, it is
 // practical to use a scope destructor to ensure that threads are
 // marked as available not matter the branch
+// FIXME: rename to scope_guard
 struct scope_dtor {
   scope_dtor(const scope_dtor &) = delete;
   scope_dtor(scope_dtor &&) = delete;
@@ -90,6 +67,8 @@ private:
 };
 
 namespace memory {
+// TODO: add a variant for std::pmr::unsynchronized_pool_resource
+// std::pmr::unsynchronized_pool_resource *pool_unsafe();
 std::pmr::synchronized_pool_resource *pool();
 
 template <typename T, typename... Args>
@@ -126,6 +105,7 @@ inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
   return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
 }
 
+// FIXME: rename this to pool
 struct gc {
   inline gc() : pool(options(), std::pmr::new_delete_resource()) {}
 
@@ -180,7 +160,50 @@ inline ostream &operator<<(ostream &oss, const pair<T, U> &p) {
 }
 } // namespace std
 
+// TODO: unify the coding style
 struct logger {
+  struct colours {
+    struct attr {
+      static constexpr const char *reset = "\x1b[0m";
+      static constexpr const char *bold = "\x1b[1m";
+      static constexpr const char *faint = "\x1b[2m";
+      static constexpr const char *italic = "\x1b[3m";
+      static constexpr const char *underline = "\x1b[4m";
+    };
+
+    struct fg {
+      static constexpr const char *black = "\x1b[30m";
+      static constexpr const char *red = "\x1b[31m";
+      static constexpr const char *green = "\x1b[32m";
+      static constexpr const char *yellow = "\x1b[33m";
+      static constexpr const char *blue = "\x1b[34m";
+      static constexpr const char *magenta = "\x1b[35m";
+      static constexpr const char *cyan = "\x1b[36m";
+      static constexpr const char *white = "\x1b[37m";
+      static constexpr const char *standard = "\x1b[39m";
+    };
+
+    struct bg {
+      static constexpr const char *black = "\x1b[40m";
+      static constexpr const char *red = "\x1b[41m";
+      static constexpr const char *green = "\x1b[42m";
+      static constexpr const char *yellow = "\x1b[43m";
+      static constexpr const char *blue = "\x1b[44m";
+      static constexpr const char *magenta = "\x1b[45m";
+      static constexpr const char *cyan = "\x1b[46m";
+      static constexpr const char *white = "\x1b[47m";
+      static constexpr const char *standard = "\x1b[49m";
+    };
+
+    template <typename... Args>
+    static inline std::string apply(Args &&...args) {
+      std::ostringstream oss;
+      ((oss << std::forward<Args>(args)), ...);
+      oss << attr::reset;
+      return oss.str();
+    }
+  };
+
   enum class log_level : unsigned {
     off = 0,
     error,
@@ -227,28 +250,47 @@ public:
     case log_level::error:
       return "ERROR";
     default:
-      throw std::logic_error("unknown log_level!");
+      return "?";
     }
+  }
+
+  template <typename T> static inline std::string trim_trailing_zeros(T val) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3) << std::left << val;
+    std::string fmt_val = oss.str();
+    if constexpr (std::is_floating_point<T>::value) {
+      while (fmt_val.back() == '0' && fmt_val.size() > 1) {
+        fmt_val.pop_back();
+      }
+      if (fmt_val.back() == '.') {
+        fmt_val.pop_back();
+      }
+    }
+    return fmt_val;
   }
 
   template <typename Chrono>
   static inline auto duration(Chrono begin, Chrono end) {
-    auto duration_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
-            .count();
+    static constexpr std::array<std::pair<long long, const char *>, 7> units = {
+        {{86'400'000'000'000LL, "day"},
+         {3'600'000'000'000LL, " hours"},
+         {60'000'000'000LL, " minutes"},
+         {1'000'000'000LL, " s"},
+         {1'000'000LL, " ms"},
+         {1000LL, " µs"},
+         {1LL, " ns"}}};
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3) << std::left;
-    if (duration_ns < 1000) {
-      oss << duration_ns << " ns";
-    } else if (duration_ns < 1'000'000) {
-      double duration_us = static_cast<double>(duration_ns) / 1000.0;
-      oss << duration_us << " µs";
-    } else if (duration_ns < 1'000'000'000) {
-      double duration_ms = static_cast<double>(duration_ns) / 1'000'000.0;
-      oss << duration_ms << " ms";
-    } else {
-      double duration_s = static_cast<double>(duration_ns) / 1'000'000'000.0;
-      oss << duration_s << " s";
+    auto stamp =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+            .count();
+#pragma unroll 8
+    for (unsigned i = 0; i < units.size(); ++i) {
+      if (stamp >= units[i].first) {
+        double value = static_cast<double>(stamp) / units[i].first;
+        oss << value << " " << units[i].second << (value < 2.0 ? "" : "s");
+        break;
+      }
     }
     return oss.str();
   }
@@ -256,44 +298,49 @@ public:
   template <typename Units, typename Value>
   static inline std::string scale(Value val, double scale_factor,
                                   const Units &units) {
-    unsigned unit_index = 0;
     double d_val = static_cast<double>(val);
-    while (d_val >= scale_factor && unit_index < units.size() - 1) {
-      d_val /= scale_factor;
+    unsigned unit_index = 0;
+#pragma unroll 8
+    while (val >= scale_factor && unit_index < units.size() - 1) {
+      val /= scale_factor;
       unit_index++;
     }
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3) << std::left << d_val << " "
-        << units[unit_index];
+    oss << trim_trailing_zeros(d_val) << " " << units[unit_index];
     return oss.str();
   }
 
   static inline std::string number_unit(std::size_t val) {
     if (val < 1000)
-      return std::to_string(val);
-    const std::vector<char> units = {'?', 'K', 'M', 'B', 'T'};
-    const double scale_factor = 1000.0;
+      return trim_trailing_zeros(val);
+    static constexpr std::array<char, 5> units = {'?', 'K', 'M', 'B', 'T'};
+    static constexpr double scale_factor = 1000.0;
     return scale(val, scale_factor, units);
   }
 
   static inline std::string size_unit(std::size_t val) {
-    const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
-    const double scale_factor = 1024.0;
+    static constexpr std::array<std::string, 5> units = {"B", "KB", "MB", "GB",
+                                                         "TB"};
+    static constexpr double scale_factor = 1024.0;
     return scale(val, scale_factor, units);
   }
 
   static inline std::string throughput(double throu) {
-    const std::vector<std::string> units = {"/s", "K/s", "M/s", "B/s", "T/s"};
-    const double scale_factor = 1000.0;
+    static constexpr std::array<std::string, 5> units = {"/s", "K/s", "M/s",
+                                                         "B/s", "T/s"};
+    static constexpr double scale_factor = 1000.0;
     return scale(throu, scale_factor, units);
   }
 
   template <typename SizeType, typename Chrono>
   static inline std::string throughput(Chrono begin, Chrono end,
                                        SizeType count) {
-    return throughput(count /
-                      std::chrono::duration<double>(end - begin).count());
+    const double thrpt =
+        count / std::chrono::duration<double>(end - begin).count();
+    return throughput(thrpt);
   }
+
+  // FIXME: remove this, deprecated! duration
 
   template <typename Chrono>
   static inline std::string time_diff(Chrono begin, Chrono end,
@@ -308,7 +355,7 @@ public:
   static inline std::string progress(std::size_t index, std::size_t size) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(2) << std::left
-        << ((double(index + 1) * 100 / size)) << "%";
+        << trim_trailing_zeros((double(index + 1) * 100 / size)) << "%";
     return oss.str();
   }
 
@@ -363,14 +410,6 @@ public:
   }
 
   template <typename... Args>
-  static inline std::string process_printv_message(Args &&...args) {
-    std::ostringstream oss;
-    ((oss << std::forward<Args>(args)), ...);
-    oss << '\n';
-    return oss.str();
-  }
-
-  template <typename... Args>
   static inline std::string process_message(auto Level, auto now,
                                             auto colour_code, auto thread_id,
                                             Args &&...args) {
@@ -379,13 +418,19 @@ public:
     oss << now << " [" << std::setfill('0') << std::setw(3) << thread_id << "] "
         << get_level_str(Level) << " ";
     ((oss << std::forward<Args>(args) << " "), ...);
-    oss << COL_RESET << '\n';
+    oss << colours::attr::reset << '\n';
     return oss.str();
   }
+
   static inline void puts(const std::string &s, auto strm) {
-    std::fputs(s.c_str(), strm);
+    puts(s.c_str(), strm);
   }
 
+  static inline void puts(const char *s, auto strm) { std::fputs(s, strm); }
+
+  // non-blocking log for trivially movable types, otherwise, they are processed
+  // in-place to avoid the overhead of potential expensive copy.  logs are sent
+  // to `stderr'.
   template <log_level Level, typename... Args>
   static inline void _log_impl(const char *colour_code, Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
@@ -415,23 +460,27 @@ public:
   [[nodiscard]] static scope_dtor setup_logger();
 
   template <typename... Args> static void debug(Args &&...args) {
-    _log_impl<log_level::debug>(COL_CYAN, std::forward<Args>(args)...);
+    _log_impl<log_level::debug>(colours::fg::cyan, std::forward<Args>(args)...);
   }
 
   template <typename... Args> static void info(Args &&...args) {
-    _log_impl<log_level::info>(COL_RESET, std::forward<Args>(args)...);
+    _log_impl<log_level::info>(colours::attr::reset,
+                               std::forward<Args>(args)...);
   }
 
   template <typename... Args> static void warn(Args &&...args) {
-    _log_impl<log_level::warn>(COL_YELLOW, std::forward<Args>(args)...);
+    _log_impl<log_level::warn>(colours::fg::yellow,
+                               std::forward<Args>(args)...);
   }
 
   template <typename... Args> static void error(Args &&...args) {
-    _log_impl<log_level::error>(COL_RED, std::forward<Args>(args)...,
+    _log_impl<log_level::error>(colours::fg::red, std::forward<Args>(args)...,
                                 stacktrace(), '\n');
     std::exit(EXIT_FAILURE);
   }
 
+  // prints are processed in-place and displayed immediately to `stdout'
+  // separated by spaces
   template <typename... Args> static void print(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
@@ -439,11 +488,13 @@ public:
     puts(process_print_message(std::forward<Args>(log_args)...), stdout);
   }
 
+  // verbose print is similar to `print()', but does not separate the parameters
+  // by spaces.
   template <typename... Args> static void printv(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
     std::scoped_lock lk(stdout_mtx);
-    puts(process_printv_message(std::forward<Args>(log_args)...), stdout);
+    puts(colours::apply(std::forward<Args>(log_args)..., '\n'), stdout);
   }
 
   static inline const auto logger_destoy = logger::setup_logger();
@@ -512,6 +563,13 @@ namespace thread {
 extern const std::uint16_t threads_per_core;
 extern const std::uint16_t num_available_threads;
 
+// fixed-size thread pool. it accepts tasks via `exec()' which are executed
+// immediately after they are submitted. if a task is submitted while all
+// threads are busy, it is enqueued and immediately gets executed in the next
+// available _hot_ thread. after a thread finishes and no tasks are pending, it
+// joins.
+// TODO: take flag to keep threads hot after finishing a task to reduce overhead
+// of launching a new thread with an optional timeout.
 struct pool {
   using Task = std::function<void(std::uint16_t)>;
 
@@ -552,6 +610,7 @@ struct pool {
       _available.pop();
       pool_is_full = false;
     }
+    logger::warn("cold start of worker", task_id);
     _pool[task_id] = std::jthread(
         [this, task_id, callback = std::forward<Task>(task)] mutable {
           callback(task_id);
@@ -599,25 +658,36 @@ private:
 };
 } // namespace thread
 
-struct scope_timer {
-  explicit inline scope_timer(const char *msg)
-      : callback([msg = std::move(msg),
-                  start = std::chrono::high_resolution_clock::now()] {
+// FIXME: turn logger into a class
+
+// TODO: move to telemetry log level
+struct scope_telemetry {
+  explicit inline scope_telemetry(const char *msg)
+      : callback([msg, start = std::chrono::high_resolution_clock::now()] {
           auto end = std::chrono::high_resolution_clock::now();
-          logger::warn(std::move(msg), logger::time_diff(start, end));
+          logger::warn(msg, logger::duration(start, end));
         }) {}
 
+  template <typename SizeType>
+  inline scope_telemetry(const char *msg, SizeType size)
+      : callback(
+            [msg, size, start = std::chrono::high_resolution_clock::now()] {
+              auto end = std::chrono::high_resolution_clock::now();
+              logger::warn(msg, logger::throughput(start, end, size));
+            }) {}
+  // TODO add producer and consumer for progress
 private:
   scope_dtor callback;
 };
 
+// FIXME: enable this macro with with telemetry flag
 // #ifndef NDEBUG
-#define make_scope_timer(x) scope_timer x(#x)
+// #define make_scope_timer(x) scope_timer x(#x)
 // #else
 // #define make_scope_timer(x) \
 //   do { \ } while (0)
 // #endif
 
-// FIXME: turn logger into a class
+template <typename Iterator> using range_pair = std::pair<Iterator, Iterator>;
 
 #endif // CORE_HPP

@@ -20,6 +20,7 @@
 #ifndef INPUT_HPP
 #define INPUT_HPP
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <getopt.h>
@@ -27,6 +28,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <numeric>
 
 #include "flavour.hpp"
 #include "logger.hpp"
@@ -58,8 +60,8 @@ struct args {
   static inline flavour exec_mode = flavour::heuristic;
 };
 
-struct input {
-  inline input() {
+struct input_source {
+  inline input_source() {
     std::string line;
     std::getline(args::stream(), line);
     fetch_ftor fetcher(line);
@@ -77,7 +79,7 @@ struct input {
     }
   }
 
-  ~input() { logger::debug("~input()"); }
+  ~input_source() { logger::debug("~input()"); }
 
   inline std::istream &operator*() { return args::stream(); }
   inline std::istream *operator->() { return &args::stream(); }
@@ -105,77 +107,86 @@ struct input {
   std::size_t num_v, num_e;
 };
 
+#ifndef CHUNK_SIZE
+#define CHUNK_SIZE (4 * 1024)
+#endif
+
 struct feed {
-  static inline constexpr std::size_t CHUNK_SIZE = 1024 * 1024; // 1MB
-  static_assert(CHUNK_SIZE != 0);
+  static inline constexpr std::size_t BUFF_SIZE = CHUNK_SIZE * 1024;
+  static_assert(BUFF_SIZE != 0);
 
   static inline constexpr char deli = '\n', sep = ' ';
 
-  using buffer = std::array<char, CHUNK_SIZE>;
+  using buffer = std::pmr::vector<char>;
 
   feed(feed &&feed) = delete;
   feed(const feed &feed) = delete;
 
-  explicit inline feed(input &in)
-      : in(in), begin_rem(remaining.data()), tail_rem(remaining.data()) {
-    std::memset(remaining.data(), 0x00, remaining.size());
-    const std::size_t _estimate_chunks = 1 + args::stream_size() / CHUNK_SIZE;
-    const double avg_edge_line =
-        static_cast<double>(args::stream_size()) / in.num_e;
-    const std::size_t _edges_per_chunk = static_cast<std::size_t>(
-        std::max(1.0, std::floor(CHUNK_SIZE / avg_edge_line)));
-    logger::info("Stream Size", logger::size_unit(args::stream_size()),
-                 "and Chunk Size", logger::size_unit(CHUNK_SIZE));
-    logger::info("Estimating", logger::number_unit(_estimate_chunks),
-                 "Chunks with", logger::number_unit(_edges_per_chunk),
-                 "Edges per Chunk");
-  }
+  explicit feed(input_source &in);
 
-  ~feed() {
-    if (tail_rem != begin_rem) {
-      // FIXME: use either exceptions or logger::error
-      logger::error("INVALID file: no NL at the end of the file");
-    }
-    logger::debug("~feed()");
-  }
+  ~feed();
 
   inline operator bool() { return reading(); }
 
-  // inline std::size_t estimate_chunks() const { return _estimate_chunks; }
-  // inline std::size_t estimate_num_edges() const { return _estimate_num_edges;
-  // } inline std::size_t edges_per_chunk() const { return _edges_per_chunk; }
+  inline std::size_t estimated_chunks() const { return _estimated_chunks; }
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }
 
-  struct buffer_content {
-    friend feed;
+  using buffer_iterator = buffer::value_type *;
 
-    buffer::const_iterator begin() const { return buff.begin(); }
-    buffer::const_iterator end() const { return buff.begin() + size; }
+  struct chunk {
+    inline chunk(buffer &buff, std::atomic_bool &been_read)
+        : buff(buff), been_read(been_read) {}
+
+    inline buffer &get_buffer() const { return buff.get(); }
+
+    inline void dispose() {
+      been_read.get().store(true, std::memory_order_relaxed);
+    }
+
+    inline void resize(std::size_t sz = BUFF_SIZE) { get_buffer().resize(sz); }
+
+    inline buffer_iterator begin() const { return get_buffer().data(); }
+
+    inline buffer_iterator end() const {
+      return get_buffer().data() + get_buffer().size();
+    }
 
   private:
-    buffer buff;
-    std::size_t size;
+    friend feed;
+
+    std::reference_wrapper<buffer> buff;
+    std::reference_wrapper<std::atomic_bool> been_read;
   };
 
-  buffer_content read_chunk();
+  void prepare();
+
+  void reclaim() { recycle_cv.notify_one(); }
+
+  chunk read_chunk();
 
 private:
-  inline bool reading() {
+  inline bool reading() const {
     if (in->bad()) {
       logger::error("UNEXPECTED READ FAILURE");
     }
     return not in->eof() && not in->fail();
   }
 
-  input &in;
-  buffer remaining;
-  char *begin_rem;
-  char *tail_rem;
+  input_source &in;
+  const std::size_t _estimated_chunks;
 
-  // const std::size_t _estimate_chunks;
-  // const std::size_t _estimate_num_edges;
-  // const std::size_t _edges_per_chunk;
+  buffer remaining;
+  buffer_iterator begin_rem;
+  buffer_iterator tail_rem;
+
+  std::pmr::vector<buffer> buffs;
+  std::vector<std::atomic_bool> was_read;
+  std::size_t current_buff = 0;
+
+  std::mutex mtx;
+  std::condition_variable recycle_cv;
+  std::jthread buffer_recycle;
 };
 } // namespace mc
 

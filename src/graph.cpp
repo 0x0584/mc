@@ -41,7 +41,7 @@ void graph::print() const {
   logger::print(oss.str());
 }
 
-constexpr static int MAX_DIGITS = 12;
+constexpr static unsigned MAX_DIGITS = 12;
 
 static inline bool is_digit(char c) noexcept {
   return static_cast<unsigned>(c - '0') <= 9;
@@ -56,9 +56,8 @@ static inline bool is_delimiter(char c) noexcept {
 }
 
 static inline bool
-read_single_vertex(graph::vertex &w,
-                   feed::buffer::const_iterator &__restrict it,
-                   const feed::buffer::const_iterator &__restrict end) {
+read_single_vertex(graph::vertex &w, feed::buffer_iterator &__restrict it,
+                   const feed::buffer_iterator &__restrict end) {
   while ((end - it) >= 4 && is_delimiter(it[0]) && is_delimiter(it[1]) &&
          is_delimiter(it[2]) && is_delimiter(it[3])) {
     it += 4;
@@ -70,7 +69,7 @@ read_single_vertex(graph::vertex &w,
     return false;
 
   w = 0;
-  std::size_t count = 0;
+  unsigned count = 0;
   while ((end - it) >= 4 && is_digit(it[0]) && is_digit(it[1]) &&
          is_digit(it[2]) && is_digit(it[3])) {
     w = w * 10 + digit(it[0]);
@@ -139,123 +138,96 @@ template <typename T> static inline void dedup(T &cont) {
 
 void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
                                std::pmr::vector<Vertex> &vertices_raw) {
-  //   std::pmr::vector<std::pmr::vector<double>> runtimes(
-  //       T, std::pmr::vector<double>(memory::pool()), memory::pool());
-
-  // #pragma unroll 32
-  //   for (auto &dur : runtimes) {
-  //     dur.reserve(feed.estimate_chunks());
-  //   }
-
   auto stamp = std::chrono::high_resolution_clock::now();
   auto stamp_end = stamp;
 
-  const std::size_t est_num_edges = 1.10 * E / T;
-  const std::size_t est_num_vertices = 2 * est_num_edges;
+  const std::size_t est_edges = 1.10 * E / T;
+  const std::size_t est_vertices = 2 * est_edges;
+  const std::size_t est_chunks = feed.estimated_chunks();
 
-  std::pmr::vector<std::pmr::vector<Edge>> local_edges(
+  std::pmr::vector<std::pmr::vector<Edge>> edges(
       T, std::pmr::vector<Edge>(memory::pool()), memory::pool());
-  std::pmr::vector<std::pmr::vector<Vertex>> local_vertices(
+  std::pmr::vector<std::pmr::vector<Vertex>> vertices(
       T, std::pmr::vector<Vertex>(memory::pool()), memory::pool());
 
 #pragma unroll 32
   for (std::size_t i = 0; i < T; ++i) {
-    local_edges[i].reserve(est_num_edges);
-    local_vertices[i].reserve(est_num_vertices);
+    edges[i].reserve(est_edges);
+    vertices[i].reserve(est_vertices);
   }
 
-  do {
-    pool.exec([&local_edges, &local_vertices, // &runtimes,
-               chunk = feed.read_chunk()](std::uint16_t tid) mutable {
-      auto &edges = local_edges[tid];
-      // std::size_t old_sz = edges.size();
-      auto &vertices = local_vertices[tid];
+  feed.prepare();
+  for (std::size_t buff_id = 0; buff_id < est_chunks; buff_id++) {
+    if (!feed) {
+      logger::error("failure to read");
+    }
+    auto chunk = feed.read_chunk();
+    pool.exec([&edges, &vertices,
+               chunk = std::move(chunk)](std::uint16_t task_id) mutable {
+      auto &local_edges = edges[task_id];
+      auto &local_vertices = vertices[task_id];
       auto it = chunk.begin();
-      // auto start = std::chrono::high_resolution_clock::now();
-      while (it != chunk.end()) {
-        Vertex u, v;
-        if (!read_single_vertex(u, it, chunk.end())) {
+      auto end = chunk.end();
+      while (it != end) {
+        Vertex u{}, v{};
+        if (!read_single_vertex(u, it, end) ||
+            !read_single_vertex(v, it, end)) {
           logger::error("cannot read vertices! abort.");
-        }
-        if (!read_single_vertex(v, it, chunk.end())) {
-          logger::error("cannot read vertices! abort.");
-        }
-        if (u == v) {
+        } else if (u == v) {
           logger::debug("self-loop edges are not supported");
         } else {
-          edges.emplace_back(u, v);
-          vertices.push_back(u);
-          vertices.push_back(v);
+          local_edges.emplace_back(u, v);
+          local_vertices.push_back(u);
+          local_vertices.push_back(v);
         }
       }
-      // auto end = std::chrono::high_resolution_clock::now();
-
-      // runtimes[tid].emplace_back((edges.size() - old_sz) /
-      //                            std::chrono::duration<double>(end -
-      //                            start).count());
+      chunk.dispose();
     });
-  } while (feed);
+  }
+  if (feed) {
+    throw std::runtime_error("feed should be EOF by now.");
+  }
   pool.join();
+  feed.reclaim();
+
   stamp_end = std::chrono::high_resolution_clock::now();
 
-  //   std::pmr::vector<double> runtimes_final(memory::pool());
-  //   std::size_t runtimes_size = 0;
-
-  // #pragma unroll 32
-  //   for (auto &dur : runtimes) {
-  //     runtimes_size += dur.size();
-  //   }
-  //   runtimes_final.reserve(runtimes_size);
-  //   for (auto &dur : runtimes) {
-  //     runtimes_final.insert(runtimes_final.end(), dur.begin(), dur.end());
-  //   }
-
-  //   auto [min_it, max_it] =
-  //       std::minmax_element(runtimes_final.begin(), runtimes_final.end());
-  //   double avg =
-  //       std::accumulate(runtimes_final.begin(), runtimes_final.end(), 0.0) /
-  //       runtimes_final.size();
-
-  logger::info("Reading", logger::throughput(stamp, stamp_end, E)
-               // ,"Workers",
-               // logger::throughput(*min_it), logger::throughput(*max_it),
-               // logger::throughput(avg)
-  );
+  logger::info("Reading", logger::throughput(stamp, stamp_end, E));
 
   stamp = std::chrono::high_resolution_clock::now();
 
 #pragma unroll 32
   for (std::size_t i = 0; i < T; ++i) {
-    pool.exec([i, &local_vertices](auto) { dedup(local_vertices[i]); });
-    pool.exec([i, &local_edges](auto) { dedup(local_edges[i]); });
+    pool.exec([i, &vertices](auto) { dedup(vertices[i]); });
+    pool.exec([i, &edges](auto) { dedup(edges[i]); });
   }
   pool.join();
 
-  std::size_t total_edges = 0;
-  std::size_t total_vertices = 0;
+  std::size_t edges_sz = 0;
+  std::size_t vertices_sz = 0;
 
 #pragma unroll 32
   for (std::size_t i = 0; i < T; ++i) {
-    total_edges += local_edges[i].size();
-    total_vertices += local_vertices[i].size();
+    edges_sz += edges[i].size();
+    vertices_sz += vertices[i].size();
   }
 
-  edges_raw.reserve(total_edges);
-  vertices_raw.reserve(total_vertices);
+  edges_raw.reserve(edges_sz);
+  vertices_raw.reserve(vertices_sz);
 
-  pool.exec([&total_vertices, &local_vertices, &vertices_raw](auto) {
+  pool.exec([&vertices_sz, &vertices, &vertices_raw](auto) {
     auto begin = std::chrono::high_resolution_clock::now();
-    merge_sort(local_vertices, vertices_raw);
+    merge_sort(vertices, vertices_raw);
     auto end = std::chrono::high_resolution_clock::now();
     logger::info("Merging Vertices",
-                 logger::throughput(begin, end, total_vertices));
+                 logger::throughput(begin, end, vertices_sz));
     vertices_raw.shrink_to_fit();
   });
-  pool.exec([&total_edges, &local_edges, &edges_raw](auto) {
+  pool.exec([&edges_sz, &edges, &edges_raw](auto) {
     auto begin = std::chrono::high_resolution_clock::now();
-    merge_sort(local_edges, edges_raw);
+    merge_sort(edges, edges_raw);
     auto end = std::chrono::high_resolution_clock::now();
-    logger::info("Merging Edges", logger::throughput(begin, end, total_edges));
+    logger::info("Merging Edges", logger::throughput(begin, end, edges_sz));
     edges_raw.shrink_to_fit();
   });
   pool.join();
@@ -344,8 +316,6 @@ void graph_builder::parse_graph(
 }
 
 graph graph_builder::build(bool) {
-  make_scope_timer(graph_builder_timer);
-
   auto begin = std::chrono::high_resolution_clock::now();
   auto stamp = begin;
   auto stamp_end = begin;

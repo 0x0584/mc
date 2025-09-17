@@ -81,6 +81,60 @@ void args::parse(int argc, char *argv[]) {
   }
 }
 
+feed::feed(input_source &in)
+    : in(in), _estimated_chunks(1 + args::stream_size() / BUFF_SIZE),
+      remaining(BUFF_SIZE, memory::pool()), begin_rem(remaining.data()),
+      tail_rem(remaining.data()),
+      buffs(_estimated_chunks, buffer(memory::pool()), memory::pool()),
+      was_read(_estimated_chunks) {
+  const double avg_edge_line =
+      static_cast<double>(args::stream_size()) / in.num_e;
+  const std::size_t _edges_per_chunk = static_cast<std::size_t>(
+      std::max(1.0, std::floor(BUFF_SIZE / avg_edge_line)));
+  logger::info("Stream Size", logger::size_unit(args::stream_size()),
+               "and Chunk Size", logger::size_unit(BUFF_SIZE));
+  logger::info("Estimating", logger::number_unit(_estimated_chunks),
+               "Chunks with", logger::number_unit(_edges_per_chunk),
+               "Edges per Chunk");
+}
+
+feed::~feed() {
+  if (tail_rem != begin_rem) {
+    // FIXME: use either exceptions or logger::error
+    logger::error("INVALID file: no NL at the end of the file");
+  }
+  logger::debug("~feed()");
+}
+
+void feed::prepare() {
+  buffer_recycle = std::jthread([this] {
+    std::pmr::vector<std::size_t> pending(buffs.size(), memory::pool());
+    std::iota(pending.begin(), pending.end(), 0ul);
+    while (!pending.empty()) {
+      {
+        std::unique_lock lk(mtx);
+        recycle_cv.wait_for(lk, std::chrono::milliseconds(100));
+      }
+      std::size_t alive = pending.size();
+      std::size_t old_alive = alive;
+#pragma unroll 32
+      for (std::size_t i = 0; i < alive;) {
+        const std::size_t idx = pending[i];
+        if (was_read[idx].exchange(false, std::memory_order_relaxed)) {
+          buffs[idx] = buffer{memory::pool()};
+          std::swap(pending[i], pending[--alive]);
+          pending.pop_back();
+        } else {
+          ++i;
+        }
+      }
+      if (old_alive > alive) [[unlikely]] {
+        logger::debug("reclaimed:", (old_alive - alive), "buffer");
+      }
+    }
+  });
+}
+
 static inline char const *last_delimiter(char const *__restrict base,
                                          char const *__restrict tail) noexcept {
 #define STRINGIFY(x) #x
@@ -113,16 +167,28 @@ static inline char const *last_delimiter(char const *__restrict base,
 #undef BLOCK_SCAN
 }
 
-feed::buffer_content feed::read_chunk() {
-  buffer_content chunk;
-  char *base = chunk.buff.data();
+feed::chunk feed::read_chunk() {
+  if (!reading()) [[unlikely]] {
+    logger::error("failure to read");
+  }
+
+  chunk fresh(buffs[current_buff], was_read[current_buff]);
+  current_buff++;
+
+  if (current_buff > buffs.size()) [[unlikely]] {
+    logger::error("chunk calculation is not correct");
+  }
+
+  fresh.resize();
+
+  char *base = fresh.begin();
 
   std::size_t total_sz = static_cast<std::size_t>(tail_rem - begin_rem);
-  if (total_sz) {
+  if (total_sz) [[likely]] {
     std::memcpy(base, begin_rem, total_sz);
   }
 
-  const std::size_t to_read = CHUNK_SIZE - total_sz;
+  const std::size_t to_read = BUFF_SIZE - total_sz;
   in->read(base + total_sz, static_cast<std::streamsize>(to_read));
   if (in->bad()) [[unlikely]] {
     logger::error("FAILURE: cannot read from stream");
@@ -133,19 +199,20 @@ feed::buffer_content feed::read_chunk() {
 
   char *tail = base + total_sz;
   char const *deli = last_delimiter(base, tail);
-  if (!deli) {
-    logger::error("FAILURE: chunk_size exceeded! recompile with a bigger size");
+  if (!deli) [[unlikely]] {
+    logger::error("FAILURE:", BUFF_SIZE,
+                  "exceeded! recompile with a bigger size");
   }
 
-  chunk.size = static_cast<std::size_t>(deli - base);
+  fresh.resize(static_cast<std::size_t>(deli - base));
 
   const char *after_nl = (deli < tail) ? deli + 1 : tail;
   const std::size_t spill = static_cast<std::size_t>(tail - after_nl);
-  if (spill) {
+  if (spill) [[likely]] {
     std::memcpy(begin_rem, after_nl, spill);
   }
   tail_rem = begin_rem + spill;
 
-  return chunk;
+  return fresh;
 }
 } // namespace mc

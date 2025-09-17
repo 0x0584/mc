@@ -80,9 +80,13 @@ int main(int argc, char *argv[]) {
 
   args::parse(argc, argv);
 
-  input in;
+  std::ostringstream oss;
+  oss << args::filename.c_str() << "_build.prof";
+  std::string prof_file = oss.str();
+
+  input_source in;
   graph_builder builder(in);
-  profiler_start("graph.prof");
+  profiler_start(prof_file.c_str());
   graph g = builder.build(args::undirected);
   profiler_stop();
   // g.print();

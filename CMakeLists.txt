@@ -12,7 +12,7 @@ endif()
 
 message(STATUS "Build Type ${CMAKE_BUILD_TYPE}")
 message(STATUS "Using C++ Standard ${CMAKE_CXX_STANDARD}")
-
+#set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15")
 add_executable(${PROJECT_NAME})
 add_custom_command(
   TARGET ${PROJECT_NAME}
@@ -20,8 +20,19 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E create_symlink
   "$<TARGET_FILE:${PROJECT_NAME}>"
   "${CMAKE_SOURCE_DIR}/${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
-  COMMENT "Creating symlink for ${PROJECT_NAME} in source directory"
+  COMMENT "Creating symlink for ${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
 )
+
+if(CMAKE_BUILD_TYPE STREQUAL Release)
+  add_custom_command(
+	TARGET ${PROJECT_NAME}
+	POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E create_symlink
+	"$<TARGET_FILE:${PROJECT_NAME}>"
+	"${CMAKE_SOURCE_DIR}/${PROJECT_NAME}"
+	COMMENT "Creating symlink for ${PROJECT_NAME}"
+  )  
+endif()
 
 # add_custom_target(copy_compile_commands
 #   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -41,6 +52,7 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -Os")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")
 
 set(THREADS_PER_CORE "2" CACHE STRING "Number of threads per core")
+# set(CHUNK_SIZE "2048" CACHE STRING "Number of threads per core")
 set(LOG_LEVEL "Info" CACHE STRING "LogLevel [Off|Debug|Info|Warn|Error]")
 if(NOT ENABLE_PROFILING)
   set(ENABLE_PROFILING "OFF" CACHE STRING "Profiling")
@@ -140,18 +152,20 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
   endif()
 
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+  set(MP_CLANG_CONFIG "${CMAKE_SOURCE_DIR}/clang-mp.cfg")
 
-  set(LLVM19_ROOT "/opt/local/libexec/llvm-19")
-  set(LLVM19_LIB_DIR "${LLVM19_ROOT}/lib")
-  set(LLVM19_INCLUDE_DIR "${LLVM19_LIB_DIR}/clang/19/include")
-  set(LIBCXX_LIB_DIR "${LLVM19_LIB_DIR}/libc++")
-  set(LIBUNWIND_LIB_DIR "${LLVM19_LIB_DIR}/libunwind")
-
-  target_include_directories(${PROJECT_NAME} PRIVATE
-    ${LLVM19_INCLUDE_DIR}
-    ${LIBCXX_LIB_DIR}
-    ${LLVM19_LIB_DIR}
-    ${LIBUNWIND_LIB_DIR}
+  if(EXISTS "${MP_CLANG_CONFIG}")
+    message(STATUS "Clang configuration found: ${MP_CLANG_CONFIG}")
+    target_compile_options(${PROJECT_NAME} PRIVATE
+      --config ${MP_CLANG_CONFIG}
+    )
+    target_link_options(${PROJECT_NAME} PRIVATE
+      --config ${MP_CLANG_CONFIG}
+    )
+  endif()
+  
+  target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
   )
 
   if(SANITIZE STREQUAL "Address")
@@ -169,67 +183,43 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   elseif(SANITIZE STREQUAL "Address_Leak")
     set(SANITIZER_FLAGS "-fsanitize=address,leak")
   else()
-	set(SANITIZER_FLAGS "")
+    set(SANITIZER_FLAGS "")
   endif()
 
   if(NOT SANITIZER_FLAGS STREQUAL "" AND CMAKE_BUILD_TYPE STREQUAL Debug)
-	message(STATUS "Sanitizer enabled ${SANITIZE}")
+    message(STATUS "Sanitizer enabled ${SANITIZE}")
   endif()
 
-  target_compile_options(${PROJECT_NAME} PRIVATE
-	-fexperimental-library
-    -fno-experimental-isel
-    $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
-  )
-
-  # if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-  # 	target_compile_options(${PROJECT_NAME} PRIVATE
-  # 	)
-  # endif()
-
   if (CMAKE_BUILD_TYPE STREQUAL "Release")
-	target_compile_options(${PROJECT_NAME} PRIVATE
-	  # -Rpass=loop-unroll
-	  # -Rpass-missed=loop-unroll
-	  # -Rpass-analysis=loop-unroll		  
+    target_compile_options(${PROJECT_NAME} PRIVATE
+      # -Rpass=loop-unroll
+      # -Rpass-missed=loop-unroll
+      # -Rpass-analysis=loop-unroll
       # -Rpass=loop-vectorize
       # -Rpass-missed=loop-vectorize
-      # -Rpass-analysis=loop-vectorize	
+      # -Rpass-analysis=loop-vectorize
       -fslp-vectorize
       -ffp-contract=fast
       -fno-rtti
-	)
+    )
   endif()
 
-  target_link_libraries(${PROJECT_NAME} PRIVATE
-    c++
-    c++experimental
-  )
-
-  target_link_directories(${PROJECT_NAME} PRIVATE
-    ${LIBCXX_LIB_DIR}
-    ${LLVM19_LIB_DIR}
-    ${LIBUNWIND_LIB_DIR}
-  )
-
   target_link_options(${PROJECT_NAME} PRIVATE
-    -Wl,-rpath,${LIBCXX_LIB_DIR}
-    -Wl,-rpath,${LLVM19_LIB_DIR}
-    -Wl,-rpath,${LIBUNWIND_LIB_DIR}
     $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
   )
 
   if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND STATIC_ANALYZER STREQUAL "ON")
-	find_program(CLANG_TIDY_EXE NAMES "clang-tidy")
-	if(CLANG_TIDY_EXE)
+    find_program(CLANG_TIDY_EXE NAMES "clang-tidy")
+    if(CLANG_TIDY_EXE)
       message(STATUS "Clang Tidy found at ${CLANG_TIDY_EXE}")
       set(CLANG_TIDY_COMMAND "${CLANG_TIDY_EXE}" "-checks=-*,modernize-*,readability-*,bugprone-*,performance-*")
       set_target_properties(${PROJECT_NAME} PROPERTIES
-		CXX_CLANG_TIDY "${CLANG_TIDY_COMMAND}"
+        CXX_CLANG_TIDY "${CLANG_TIDY_COMMAND}"
       )
-	endif()
+    endif()
   endif()
 endif()
+
 
 message(STATUS "Log Level is set to ${LOG_LEVEL}")
 message(STATUS "Threads per core are set to ${THREADS_PER_CORE}")

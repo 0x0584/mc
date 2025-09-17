@@ -25,6 +25,13 @@
 
 namespace mc {
 // FIXME: refactor the graph class
+// graphs are stored as Column Sparse Representation for optimal storage and
+// manipulation.  original vertices are sorted and stored in `key_to_vertex'
+// which serves as a mapping between keys and vertices.  a key is the internal
+// manner in which the graph manipulates the vertices and edges.  the edges are
+// stored in `neighs', all graphs are considered undirected.  the neighbours of
+// a particular vertex v with key k are the subarray indicated by `offsets' as
+// folows `N(v)=[offsets[k]..offsets[k+1]]'.
 struct graph {
   friend struct graph_builder;
 
@@ -122,6 +129,7 @@ private:
 
   std::size_t n_vertices;
   std::size_t n_edges;
+
   std::pmr::vector<offset> offsets;
   std::pmr::vector<key> neighs;
   std::pmr::vector<vertex> key_to_vertex;
@@ -136,7 +144,7 @@ struct graph_builder {
   graph_builder(graph_builder &&) = delete;
   graph_builder(const graph_builder &) = delete;
 
-  explicit graph_builder(input &in)
+  explicit inline graph_builder(input_source &in)
       : feed(in), T(args::num_threads), V(feed.num_vertices()),
         E(feed.num_edges()), CHUNK((E + T - 1) / T), pool(T) {}
 
