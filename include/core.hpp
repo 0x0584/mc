@@ -37,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <cxxabi.h>
@@ -66,75 +67,6 @@ private:
   std::function<void()> callback;
 };
 
-namespace memory {
-// TODO: add a variant for std::pmr::unsynchronized_pool_resource
-// std::pmr::unsynchronized_pool_resource *pool_unsafe();
-std::pmr::synchronized_pool_resource *pool();
-
-template <typename T, typename... Args>
-inline std::shared_ptr<T> make_shared(Args &&...args) {
-  std::pmr::polymorphic_allocator<T> alloc(pool());
-  return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
-}
-
-template <typename T> struct deleter {
-  inline deleter() noexcept : resource(nullptr) {}
-
-  inline explicit deleter(std::pmr::memory_resource *res) noexcept
-      : resource(res) {}
-
-  inline void operator()(T *p) const {
-    if (p && resource) {
-      std::pmr::polymorphic_allocator<T> alloc(resource);
-      alloc.deallocate(p, 1);
-    }
-  }
-
-  inline const std::pmr::memory_resource *get_resource() const {
-    return resource;
-  }
-
-private:
-  std::pmr::memory_resource *resource;
-};
-
-template <typename T, typename... Args>
-inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
-  void *memory = pool()->allocate(sizeof(T), alignof(T));
-  T *object = new (memory) T(std::forward<Args>(args)...);
-  return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
-}
-
-// FIXME: rename this to pool
-struct gc {
-  inline gc() : pool(options(), std::pmr::new_delete_resource()) {}
-
-  inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
-    return std::pmr::polymorphic_allocator<std::byte>(&pool);
-  }
-
-  template <typename T>
-  inline std::pmr::polymorphic_allocator<T> get_allocator() {
-    return std::pmr::polymorphic_allocator<T>(&pool);
-  }
-
-  inline std::pmr::synchronized_pool_resource *get_pool() { return &pool; }
-
-private:
-  static std::pmr::pool_options
-  options(std::size_t max_blocks_per_chunk = 2,
-          std::size_t largest_required_pool_block = 256) {
-    std::pmr::pool_options opts;
-    opts.max_blocks_per_chunk = max_blocks_per_chunk;
-    opts.largest_required_pool_block = largest_required_pool_block;
-    return opts;
-  }
-
-  std::pmr::synchronized_pool_resource pool;
-};
-
-} // namespace memory
-
 template <typename T, typename = void> struct is_loggable : std::false_type {};
 
 template <typename T>
@@ -159,6 +91,16 @@ inline ostream &operator<<(ostream &oss, const pair<T, U> &p) {
   return oss << "{" << p.first << ", " << p.second << "}";
 }
 } // namespace std
+
+static inline void locked_puts(const std::string &s, auto strm) {
+  locked_puts(s.c_str(), strm);
+}
+
+static inline void locked_puts(const char *s, auto strm) {
+  flockfile(strm);
+  std::fputs(s, strm);
+  funlockfile(strm);
+}
 
 // TODO: unify the coding style
 struct logger {
@@ -219,8 +161,6 @@ struct logger {
   struct log_entry;
 
 private:
-  static inline std::mutex stderr_mtx;
-  static inline std::mutex stdout_mtx;
   static inline std::mutex log_id_mtx;
   static inline std::size_t print_log_id = 1;
 
@@ -273,12 +213,12 @@ public:
   static inline auto duration(Chrono begin, Chrono end) {
     static constexpr std::array<std::pair<long long, const char *>, 7> units = {
         {{86'400'000'000'000LL, "day"},
-         {3'600'000'000'000LL, " hours"},
-         {60'000'000'000LL, " minutes"},
-         {1'000'000'000LL, " s"},
-         {1'000'000LL, " ms"},
-         {1000LL, " µs"},
-         {1LL, " ns"}}};
+         {3'600'000'000'000LL, "hours"},
+         {60'000'000'000LL, "minutes"},
+         {1'000'000'000LL, "s"},
+         {1'000'000LL, "ms"},
+         {1000LL, "µs"},
+         {1LL, "ns"}}};
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3) << std::left;
     auto stamp =
@@ -288,7 +228,8 @@ public:
     for (unsigned i = 0; i < units.size(); ++i) {
       if (stamp >= units[i].first) {
         double value = static_cast<double>(stamp) / units[i].first;
-        oss << value << " " << units[i].second << (value < 2.0 ? "" : "s");
+        oss << value << " " << units[i].second
+            << (i < 3 && value >= 2.0 ? "s" : "");
         break;
       }
     }
@@ -301,8 +242,8 @@ public:
     double d_val = static_cast<double>(val);
     unsigned unit_index = 0;
 #pragma unroll 8
-    while (val >= scale_factor && unit_index < units.size() - 1) {
-      val /= scale_factor;
+    while (d_val >= scale_factor && unit_index < units.size() - 1) {
+      d_val /= scale_factor;
       unit_index++;
     }
     std::ostringstream oss;
@@ -319,8 +260,8 @@ public:
   }
 
   static inline std::string size_unit(std::size_t val) {
-    static constexpr std::array<std::string, 5> units = {"B", "KB", "MB", "GB",
-                                                         "TB"};
+    static constexpr std::array<std::string, 5> units = {"B", "KiB", "MiB",
+                                                         "GiB", "TiB"};
     static constexpr double scale_factor = 1024.0;
     return scale(val, scale_factor, units);
   }
@@ -422,12 +363,6 @@ public:
     return oss.str();
   }
 
-  static inline void puts(const std::string &s, auto strm) {
-    puts(s.c_str(), strm);
-  }
-
-  static inline void puts(const char *s, auto strm) { std::fputs(s, strm); }
-
   // non-blocking log for trivially movable types, otherwise, they are processed
   // in-place to avoid the overhead of potential expensive copy.  logs are sent
   // to `stderr'.
@@ -484,8 +419,8 @@ public:
   template <typename... Args> static void print(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
-    std::scoped_lock lk(stdout_mtx);
-    puts(process_print_message(std::forward<Args>(log_args)...), stdout);
+    // FIXME: this is blocking!
+    locked_puts(process_print_message(std::forward<Args>(log_args)...), stdout);
   }
 
   // verbose print is similar to `print()', but does not separate the parameters
@@ -493,8 +428,7 @@ public:
   template <typename... Args> static void printv(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
-    std::scoped_lock lk(stdout_mtx);
-    puts(colours::apply(std::forward<Args>(log_args)..., '\n'), stdout);
+    locked_puts(colours::apply(std::forward<Args>(log_args)..., '\n'), stdout);
   }
 
   static inline const auto logger_destoy = logger::setup_logger();
@@ -547,17 +481,171 @@ template <> struct equal_to<logger::log_entry> {
 };
 } // namespace std
 
+// #ifdef NDEBUG
+// #define Assert(cond, ...) ((void)0)
+// #else
+// #define STRINGIFY(x) #x
+// #define Assert(cond, ...) \
+//   ((void)((cond) ? ((void)0) \
+//                  : logger::error(#cond, "failed, hint:", __VA_ARGS__, "in", \
+//                                  __func__, "at", \
+//                                  __FILE__ ":" STRINGIFY(__LINE__))))
+// #endif
+
+template <typename... Args>
+inline void assert_impl(bool cond, const char *expr_str, Args &&...args) {
+  if (!cond) {
+    logger::error(expr_str, std::forward<Args>(args)...);
+  }
+}
+
+// Macro only for capturing expression text and location
 #ifdef NDEBUG
-#define Assert(cond, ...) ((void)0)
+#define Assert(expr, ...) ((void)0)
 #else
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
-#define Assert(cond, ...)                                                      \
-  ((void)(cond ? ((void)0)                                                     \
-               : logger::error(#cond, "failed, hint:", ##__VA_ARGS__, "in",    \
-                               __func__, "at",                                 \
-                               __FILE__ ":" TOSTRING(__LINE__))))
+#define Assert(expr, ...)                                                      \
+  assert_impl((expr), #expr, ##__VA_ARGS__, __func__, __FILE__, __LINE__)
 #endif
+
+namespace memory {
+// TODO: add a variant for std::pmr::unsynchronized_pool_resource
+// std::pmr::unsynchronized_pool_resource *pool_unsafe();
+std::pmr::unsynchronized_pool_resource *pool();
+
+template <typename T, typename... Args>
+inline std::shared_ptr<T> make_shared(Args &&...args) {
+  std::pmr::polymorphic_allocator<T> alloc(pool());
+  return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
+}
+
+template <typename T> struct deleter {
+  inline deleter() noexcept : resource(nullptr) {}
+
+  inline explicit deleter(std::pmr::memory_resource *res) noexcept
+      : resource(res) {}
+
+  inline void operator()(T *p) const {
+    if (p && resource) {
+      std::pmr::polymorphic_allocator<T> alloc(resource);
+      alloc.deallocate(p, 1);
+    }
+  }
+
+  inline const std::pmr::memory_resource *get_resource() const {
+    return resource;
+  }
+
+private:
+  std::pmr::memory_resource *resource;
+};
+
+template <typename T, typename... Args>
+inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
+  void *memory = pool()->allocate(sizeof(T), alignof(T));
+  T *object = new (memory) T(std::forward<Args>(args)...);
+  return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
+}
+
+#define GC_ENABLE_MEMORY_TRACKING
+
+#ifdef GC_ENABLE_MEMORY_TRACKING
+struct tracking_resource : std::pmr::memory_resource {
+  std::uint32_t id;
+  std::pmr::memory_resource *upstream;
+  std::size_t total_allocated_bytes = 0;
+  std::size_t total_deallocated_bytes = 0;
+  std::size_t peak_memory_usage = 0;
+  std::size_t current_memory_usage = 0;
+  std::size_t alloc_count = 0;
+  std::size_t dealloc_count = 0;
+  std::unordered_map<std::size_t, std::size_t> hist;
+
+  tracking_resource(std::uint32_t id, std::pmr::memory_resource *up)
+      : id(id), upstream(up) {}
+
+  ~tracking_resource() {
+    std::ostringstream oss;
+    oss << "--- Memory Telemetry " << id << " ---"
+        << "\nTotal Allocated: " << logger::size_unit(total_allocated_bytes)
+        << "\nTotal Deallocated: " << logger::size_unit(total_deallocated_bytes)
+        << "\nPeak Memory Usage: " << logger::size_unit(peak_memory_usage)
+        << "\nCurrent Leaked Bytes (if any): "
+        << logger::size_unit(total_allocated_bytes - total_deallocated_bytes)
+        << "\nAllocation Count: " << logger::number_unit(alloc_count)
+        << "\nDeallocation Count: " << logger::number_unit(dealloc_count)
+        << "\n--- Allocation Size Histogram ---\n";
+    for (auto &[sz, count] : hist) {
+      oss << logger::size_unit(sz) << " " << logger::number_unit(count)
+          << " allocs\n";
+    }
+    locked_puts(oss.str(), stdout);
+  }
+
+  void *do_allocate(std::size_t bytes, std::size_t alignment) override {
+    total_allocated_bytes += bytes;
+    alloc_count++;
+    hist[bytes]++;
+    current_memory_usage += bytes;
+    peak_memory_usage = std::max(peak_memory_usage, current_memory_usage);
+    return upstream->allocate(bytes, alignment);
+  }
+
+  void do_deallocate(void *p, std::size_t bytes,
+                     std::size_t alignment) override {
+    total_deallocated_bytes += bytes;
+    dealloc_count++;
+    current_memory_usage -= bytes;
+    upstream->deallocate(p, bytes, alignment);
+  }
+
+  bool
+  do_is_equal(const std::pmr::memory_resource &other) const noexcept override {
+    return this == &other;
+  }
+};
+#endif
+
+#define GC_MAX_NUM_BLOCKS 32ul
+#define GC_MAX_POOL_BLOCK_SIZE 2048ul
+
+// FIXME: rename this to pool
+struct gc {
+  inline gc(std::uint32_t id)
+#ifdef GC_ENABLE_MEMORY_TRACKING
+      : tracker(id, std::pmr::new_delete_resource()), pool(options(), &tracker)
+#else
+      : pool(options(), std::pmr::new_delete_resource())
+#endif
+  {
+  }
+
+  inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
+    return std::pmr::polymorphic_allocator<std::byte>(&pool);
+  }
+
+  template <typename T>
+  inline std::pmr::polymorphic_allocator<T> get_allocator() {
+    return std::pmr::polymorphic_allocator<T>(&pool);
+  }
+
+  inline std::pmr::unsynchronized_pool_resource *get_pool() { return &pool; }
+
+private:
+  static std::pmr::pool_options
+  options(std::size_t max_blocks_per_chunk = GC_MAX_NUM_BLOCKS,
+          std::size_t largest_required_pool_block = GC_MAX_POOL_BLOCK_SIZE) {
+    std::pmr::pool_options opts;
+    opts.max_blocks_per_chunk = max_blocks_per_chunk;
+    opts.largest_required_pool_block = largest_required_pool_block;
+    return opts;
+  }
+
+#ifdef GC_ENABLE_MEMORY_TRACKING
+  tracking_resource tracker;
+#endif
+  std::pmr::unsynchronized_pool_resource pool;
+};
+} // namespace memory
 
 namespace thread {
 extern const std::uint16_t threads_per_core;
@@ -610,7 +698,7 @@ struct pool {
       _available.pop();
       pool_is_full = false;
     }
-    logger::warn("cold start of worker", task_id);
+    logger::debug("cold start of worker", task_id);
     _pool[task_id] = std::jthread(
         [this, task_id, callback = std::forward<Task>(task)] mutable {
           callback(task_id);

@@ -42,7 +42,6 @@ labels = [
 phase_columns = [
     "ReadThr(MB/s)",
     "ComputeDegreesThr(M/s)",
-    "ParseThr(M/s)",
     "ConstructThr(M/s)",
 ]
 phase_colours = plt.cm.tab10.colors
@@ -54,9 +53,8 @@ def colour(i, colours=plt.cm.tab10.colors):
 
 fig, ax = plt.subplots(figsize=(14, 6))
 read_thr = df["ReadThr(MB/s)"]
-parse_thr = df["ParseThr(M/s)"]
 comp_deg_thr = df["ComputeDegreesThr(M/s)"]
-ratio = read_thr / np.maximum(parse_thr, comp_deg_thr)
+# ratio = read_thr / np.maximum(parse_thr, comp_deg_thr)
 
 for i, col in enumerate(phase_columns):
     ax.plot(labels, df[col], marker="o", label=col, color=colour(i))
@@ -79,26 +77,26 @@ plt.close()
 phase_times = []
 phase_labels = []
 
-if "ReadTime(s)" in df:
-    phase_times.append(df["ReadTime(s)"])
+if "ReadTime(ns)" in df:
+    phase_times.append(df["ReadTime(ns)"])
     phase_labels.append("Read")
-if "ParseTime(s)" in df:
-    phase_times.append(df["ParseTime(s)"])
+if "ParseTime(ns)" in df:
+    phase_times.append(df["ParseTime(ns)"])
     phase_labels.append("Parse")
-if "ConstructTime(s)" in df:
-    phase_times.append(df["ConstructTime(s)"])
+if "ConstructTime(ns)" in df:
+    phase_times.append(df["ConstructTime(ns)"])
     phase_labels.append("Construct")
-if "MergeVerticesTime(s)" in df:
-    phase_times.append(df["MergeVerticesTime(s)"])
+if "MergeVerticesTime(ns)" in df:
+    phase_times.append(df["MergeVerticesTime(ns)"])
     phase_labels.append("MergeVertices")
-if "MergeEdgesTime(s)" in df:
-    phase_times.append(df["MergeEdgesTime(s)"])
+if "MergeEdgesTime(ns)" in df:
+    phase_times.append(df["MergeEdgesTime(ns)"])
     phase_labels.append("MergeEdges")
-if "ComputeDegreesTime(s)" in df:
-    phase_times.append(df["ComputeDegreesTime(s)"])
+if "ComputeDegreesTime(ns)" in df:
+    phase_times.append(df["ComputeDegreesTime(ns)"])
     phase_labels.append("ComputeDegrees")
 
-phase_pcts = [(p / df["TotalTime(s)"]).fillna(0) * 100 for p in phase_times]
+phase_pcts = [(p / df["TotalTime(ns)"]).fillna(0) * 100 for p in phase_times]
 
 fig, ax = plt.subplots(figsize=(12, 6))
 bottom = None
@@ -107,7 +105,7 @@ for pct, label in zip(phase_pcts, phase_labels):
     bars = ax.bar(labels, pct, bottom=bottom, label=f"{label} (%)")
     # if label == 'Read':
     #     for i, bar in enumerate(bars):
-    #         if df['ReadTime(s)'][i] > 2 * df['ParseTime(s)'][i]:
+    #         if df['ReadTime(ns)'][i] > 2 * df['ParseTime(ns)'][i]:
     #             bar.set_edgecolor('black')
     #             bar.set_linewidth(1.5)
     bottom = pct if bottom is None else bottom + pct
@@ -126,12 +124,12 @@ df_sorted = df.sort_values(by="Edges")
 fig, ax = plt.subplots(figsize=(8, 6))
 ax.scatter(
     df_sorted["Edges"],
-    df_sorted["TotalTime(s)"],
+    df_sorted["TotalTime(ns)"],
     c="darkblue",
     marker="o",
     label="Edges",
 )
-ax.plot(df_sorted["Edges"], df_sorted["TotalTime(s)"], c="darkblue", linewidth=1)
+ax.plot(df_sorted["Edges"], df_sorted["TotalTime(ns)"], c="darkblue", linewidth=1)
 ax.set_xscale("log")
 ax.set_yscale("log")
 ax.set_xlabel("Edges (log scale)")
@@ -323,11 +321,11 @@ create_heatmap(
     plt.cm.RdYlGn,
 )
 create_heatmap(
-    "ReadTime(s)",
-    "Average Read Time (s)",
+    "ReadTime(ns)",
+    "Average Read Time (ns)",
     f"{output_dir}/heatmap_read_time.png",
     plt.cm.RdYlGn_r,
-    compare_metric="ParseTime(s)",
+    compare_metric="ParseTime(ns)",
 )
 create_heatmap(
     "EdgesPerChunk",

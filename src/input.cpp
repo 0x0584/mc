@@ -81,20 +81,23 @@ void args::parse(int argc, char *argv[]) {
   }
 }
 
-feed::feed(input_source &in)
-    : in(in), _estimated_chunks(1 + args::stream_size() / BUFF_SIZE),
-      remaining(BUFF_SIZE, memory::pool()), begin_rem(remaining.data()),
-      tail_rem(remaining.data()),
-      buffs(_estimated_chunks, buffer(memory::pool()), memory::pool()),
-      was_read(_estimated_chunks) {
+feed::feed(input_source &in, std::size_t num_jobs)
+    : in(in), buffs(feed_jobs_scale(num_jobs)),
+      idxs(feed_jobs_scale(num_jobs)) {
+  std::iota(idxs.begin(), idxs.end(), 0ul);
+  logger::debug("Feed has", feed_jobs_scale(num_jobs), "buffers for", num_jobs,
+                "jobs");
+
+  const std::size_t estimated_chunks = 1 + args::stream_size() / BUFF_SIZE;
   const double avg_edge_line =
       static_cast<double>(args::stream_size()) / in.num_e;
-  const std::size_t _edges_per_chunk = static_cast<std::size_t>(
+  const std::size_t edges_per_chunk = static_cast<std::size_t>(
       std::max(1.0, std::floor(BUFF_SIZE / avg_edge_line)));
   logger::info("Stream Size", logger::size_unit(args::stream_size()),
                "and Chunk Size", logger::size_unit(BUFF_SIZE));
-  logger::info("Estimating", logger::number_unit(_estimated_chunks),
-               "Chunks with", logger::number_unit(_edges_per_chunk),
+  logger::info("Estimating", logger::number_unit(estimated_chunks),
+               "Chunks with",
+               logger::number_unit(std::min(edges_per_chunk, in.num_e)),
                "Edges per Chunk");
 }
 
@@ -104,35 +107,6 @@ feed::~feed() {
     logger::error("INVALID file: no NL at the end of the file");
   }
   logger::debug("~feed()");
-}
-
-void feed::prepare() {
-  buffer_recycle = std::jthread([this] {
-    std::pmr::vector<std::size_t> pending(buffs.size(), memory::pool());
-    std::iota(pending.begin(), pending.end(), 0ul);
-    while (!pending.empty()) {
-      {
-        std::unique_lock lk(mtx);
-        recycle_cv.wait_for(lk, std::chrono::milliseconds(100));
-      }
-      std::size_t alive = pending.size();
-      std::size_t old_alive = alive;
-#pragma unroll 32
-      for (std::size_t i = 0; i < alive;) {
-        const std::size_t idx = pending[i];
-        if (was_read[idx].exchange(false, std::memory_order_relaxed)) {
-          buffs[idx] = buffer{memory::pool()};
-          std::swap(pending[i], pending[--alive]);
-          pending.pop_back();
-        } else {
-          ++i;
-        }
-      }
-      if (old_alive > alive) [[unlikely]] {
-        logger::debug("reclaimed:", (old_alive - alive), "buffer");
-      }
-    }
-  });
 }
 
 static inline char const *last_delimiter(char const *__restrict base,
@@ -168,22 +142,26 @@ static inline char const *last_delimiter(char const *__restrict base,
 }
 
 feed::chunk feed::read_chunk() {
-  if (!reading()) [[unlikely]] {
-    logger::error("failure to read");
+  std::size_t idx;
+  {
+    std::unique_lock lk(mtx);
+    recycle_cv.wait(lk, [this] { return !idxs.empty() || !reading(); });
+    if (!reading()) [[unlikely]] {
+      return {nullptr, nullptr, 0, this};
+    }
+    idx = idxs.back();
+    logger::debug("available buffer", idx);
+    idxs.pop_back();
   }
 
-  chunk fresh(buffs[current_buff], was_read[current_buff]);
-  current_buff++;
+  buffer &buff = buffs[idx];
+  buff.reserve(BUFF_SIZE);
 
-  if (current_buff > buffs.size()) [[unlikely]] {
-    logger::error("chunk calculation is not correct");
-  }
+  char *base = buff.data();
 
-  fresh.resize();
-
-  char *base = fresh.begin();
-
+  Assert(tail_rem >= begin_rem);
   std::size_t total_sz = static_cast<std::size_t>(tail_rem - begin_rem);
+  Assert(total_sz <= BUFF_SIZE);
   if (total_sz) [[likely]] {
     std::memcpy(base, begin_rem, total_sz);
   }
@@ -204,8 +182,7 @@ feed::chunk feed::read_chunk() {
                   "exceeded! recompile with a bigger size");
   }
 
-  fresh.resize(static_cast<std::size_t>(deli - base));
-
+  const std::size_t size = static_cast<std::size_t>(deli - base);
   const char *after_nl = (deli < tail) ? deli + 1 : tail;
   const std::size_t spill = static_cast<std::size_t>(tail - after_nl);
   if (spill) [[likely]] {
@@ -213,6 +190,6 @@ feed::chunk feed::read_chunk() {
   }
   tail_rem = begin_rem + spill;
 
-  return fresh;
+  return {base, base + size, idx, this};
 }
 } // namespace mc

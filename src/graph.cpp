@@ -133,7 +133,6 @@ static inline void merge_sort(T &states, U &out) {
 template <typename T> static inline void dedup(T &cont) {
   std::sort(cont.begin(), cont.end());
   cont.erase(std::unique(cont.begin(), cont.end()), cont.end());
-  cont.shrink_to_fit();
 }
 
 void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
@@ -143,7 +142,6 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
 
   const std::size_t est_edges = 1.10 * E / T;
   const std::size_t est_vertices = 2 * est_edges;
-  const std::size_t est_chunks = feed.estimated_chunks();
 
   std::pmr::vector<std::pmr::vector<Edge>> edges(
       T, std::pmr::vector<Edge>(memory::pool()), memory::pool());
@@ -156,24 +154,20 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
     vertices[i].reserve(est_vertices);
   }
 
-  feed.prepare();
-  for (std::size_t buff_id = 0; buff_id < est_chunks; buff_id++) {
-    if (!feed) {
-      logger::error("failure to read");
-    }
-    auto chunk = feed.read_chunk();
+  while (feed) {
     pool.exec([&edges, &vertices,
-               chunk = std::move(chunk)](std::uint16_t task_id) mutable {
+               chunk = feed.read_chunk()](std::uint16_t task_id) mutable {
       auto &local_edges = edges[task_id];
       auto &local_vertices = vertices[task_id];
-      auto it = chunk.begin();
-      auto end = chunk.end();
+      auto it = chunk.begin;
+      auto end = chunk.end;
       while (it != end) {
         Vertex u{}, v{};
         if (!read_single_vertex(u, it, end) ||
             !read_single_vertex(v, it, end)) {
           logger::error("cannot read vertices! abort.");
-        } else if (u == v) {
+        }
+        if (u == v) [[unlikely]] {
           logger::debug("self-loop edges are not supported");
         } else {
           local_edges.emplace_back(u, v);
@@ -184,12 +178,7 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
       chunk.dispose();
     });
   }
-  if (feed) {
-    throw std::runtime_error("feed should be EOF by now.");
-  }
   pool.join();
-  feed.reclaim();
-
   stamp_end = std::chrono::high_resolution_clock::now();
 
   logger::info("Reading", logger::throughput(stamp, stamp_end, E));
@@ -209,7 +198,9 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
 #pragma unroll 32
   for (std::size_t i = 0; i < T; ++i) {
     edges_sz += edges[i].size();
+    edges[i].shrink_to_fit();
     vertices_sz += vertices[i].size();
+    vertices[i].shrink_to_fit();
   }
 
   edges_raw.reserve(edges_sz);
@@ -221,20 +212,20 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
     auto end = std::chrono::high_resolution_clock::now();
     logger::info("Merging Vertices",
                  logger::throughput(begin, end, vertices_sz));
-    vertices_raw.shrink_to_fit();
   });
   pool.exec([&edges_sz, &edges, &edges_raw](auto) {
     auto begin = std::chrono::high_resolution_clock::now();
     merge_sort(edges, edges_raw);
     auto end = std::chrono::high_resolution_clock::now();
     logger::info("Merging Edges", logger::throughput(begin, end, edges_sz));
-    edges_raw.shrink_to_fit();
   });
   pool.join();
 
+  vertices_raw.shrink_to_fit();
+  edges_raw.shrink_to_fit();
+
   stamp_end = std::chrono::high_resolution_clock::now();
-  logger::info("Finished Reading Graph in",
-               logger::time_diff(stamp, stamp_end));
+  logger::info("Finished Reading Graph in", logger::duration(stamp, stamp_end));
 
   const std::size_t N = vertices_raw.size();
   const std::size_t M = edges_raw.size();
@@ -311,8 +302,7 @@ void graph_builder::parse_graph(
   auto stamp_end = std::chrono::high_resolution_clock::now();
 
   logger::info("Computing Degrees", logger::throughput(stamp, stamp_end, E));
-  logger::info("Finished Parsing Graph in",
-               logger::time_diff(stamp, stamp_end));
+  logger::info("Finished Parsing Graph in", logger::duration(stamp, stamp_end));
 }
 
 graph graph_builder::build(bool) {
@@ -360,7 +350,7 @@ graph graph_builder::build(bool) {
 
   auto end = std::chrono::high_resolution_clock::now();
   logger::info("Graph with", V, "Vertices and", E, "Edges was Loaded in",
-               logger::time_diff(begin, end));
+               logger::duration(begin, end));
   return G;
 }
 

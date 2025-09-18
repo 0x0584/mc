@@ -145,7 +145,7 @@ struct graph_builder {
   graph_builder(const graph_builder &) = delete;
 
   explicit inline graph_builder(input_source &in)
-      : feed(in), T(args::num_threads), V(feed.num_vertices()),
+      : T(args::num_threads), feed(in, T), V(feed.num_vertices()),
         E(feed.num_edges()), CHUNK((E + T - 1) / T), pool(T) {}
 
   ~graph_builder() { logger::debug("~graph_builder()"); }
@@ -162,9 +162,9 @@ private:
                    std::pmr::vector<Off> &degrees,
                    std::pmr::vector<std::pair<Key, Key>> &edges_key);
 
+  const std::size_t T;
   mc::feed feed;
 
-  const std::size_t T;
   const std::size_t V;
   const std::size_t E;
   const std::size_t CHUNK;

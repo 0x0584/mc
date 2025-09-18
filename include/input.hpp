@@ -111,7 +111,13 @@ struct input_source {
 #define CHUNK_SIZE (4 * 1024)
 #endif
 
+#define FEED_SCALE_JOBS 3
+
 struct feed {
+  static inline std::size_t feed_jobs_scale(std::size_t num_jobs) {
+    return num_jobs * FEED_SCALE_JOBS;
+  }
+
   static inline constexpr std::size_t BUFF_SIZE = CHUNK_SIZE * 1024;
   static_assert(BUFF_SIZE != 0);
 
@@ -119,74 +125,69 @@ struct feed {
 
   using buffer = std::pmr::vector<char>;
 
-  feed(feed &&feed) = delete;
-  feed(const feed &feed) = delete;
+  feed(const feed &) = delete;
+  feed &operator=(const feed &) = delete;
 
-  explicit feed(input_source &in);
+  explicit feed(input_source &in, std::size_t feed_size);
 
   ~feed();
 
   inline operator bool() { return reading(); }
 
-  inline std::size_t estimated_chunks() const { return _estimated_chunks; }
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }
 
   using buffer_iterator = buffer::value_type *;
 
   struct chunk {
-    inline chunk(buffer &buff, std::atomic_bool &been_read)
-        : buff(buff), been_read(been_read) {}
+    inline void dispose() { owner->reclaim(idx); }
 
-    inline buffer &get_buffer() const { return buff.get(); }
-
-    inline void dispose() {
-      been_read.get().store(true, std::memory_order_relaxed);
+    inline std::size_t size() const {
+      return static_cast<std::size_t>(end - begin);
     }
 
-    inline void resize(std::size_t sz = BUFF_SIZE) { get_buffer().resize(sz); }
-
-    inline buffer_iterator begin() const { return get_buffer().data(); }
-
-    inline buffer_iterator end() const {
-      return get_buffer().data() + get_buffer().size();
-    }
+    const buffer_iterator begin;
+    const buffer_iterator end;
 
   private:
     friend feed;
 
-    std::reference_wrapper<buffer> buff;
-    std::reference_wrapper<std::atomic_bool> been_read;
+    inline chunk(buffer_iterator begin, buffer_iterator end, std::size_t idx,
+                 feed *owner)
+        : begin(begin), end(end), idx(idx), owner(owner) {}
+
+    const std::size_t idx;
+    feed *owner;
   };
-
-  void prepare();
-
-  void reclaim() { recycle_cv.notify_one(); }
 
   chunk read_chunk();
 
 private:
+  inline void reclaim(std::size_t idx) {
+    std::scoped_lock lk(mtx);
+    idxs.emplace_back(idx);
+    logger::debug("reclaimed buffer", idx);
+    recycle_cv.notify_one();
+  }
+
   inline bool reading() const {
     if (in->bad()) {
       logger::error("UNEXPECTED READ FAILURE");
     }
-    return not in->eof() && not in->fail();
+    return !in->eof() && !in->fail();
   }
 
   input_source &in;
-  const std::size_t _estimated_chunks;
 
-  buffer remaining;
-  buffer_iterator begin_rem;
-  buffer_iterator tail_rem;
+  buffer remaining{BUFF_SIZE, memory::pool()};
+  buffer_iterator begin_rem = remaining.data();
+  buffer_iterator tail_rem = remaining.data();
 
-  std::pmr::vector<buffer> buffs;
-  std::vector<std::atomic_bool> was_read;
-  std::size_t current_buff = 0;
+  std::vector<buffer> buffs;
 
-  std::mutex mtx;
+  mutable std::mutex mtx;
   std::condition_variable recycle_cv;
-  std::jthread buffer_recycle;
+  std::vector<std::size_t> idxs;
 };
 } // namespace mc
 

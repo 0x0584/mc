@@ -22,3 +22,5 @@ mc
 *.prof
 /Testing/
 /.cache/
+/max-clique-Debug
+/max-clique-Release

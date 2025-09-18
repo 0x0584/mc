@@ -20,7 +20,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E create_symlink
   "$<TARGET_FILE:${PROJECT_NAME}>"
   "${CMAKE_SOURCE_DIR}/${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
-  COMMENT "Creating symlink for ${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
+  COMMENT "Creating symlink ${CMAKE_SOURCE_DIR}/${PROJECT_NAME}-${CMAKE_BUILD_TYPE}"
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL Release)
@@ -30,8 +30,16 @@ if(CMAKE_BUILD_TYPE STREQUAL Release)
 	COMMAND ${CMAKE_COMMAND} -E create_symlink
 	"$<TARGET_FILE:${PROJECT_NAME}>"
 	"${CMAKE_SOURCE_DIR}/${PROJECT_NAME}"
-	COMMENT "Creating symlink for ${PROJECT_NAME}"
-  )  
+	COMMENT "Creating symlink ${CMAKE_SOURCE_DIR}/${PROJECT_NAME}"
+  )
+  add_custom_command(
+	TARGET ${PROJECT_NAME}
+	POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E create_symlink
+	"$<TARGET_FILE:${PROJECT_NAME}>"
+	"${CMAKE_SOURCE_DIR}/graphs/${PROJECT_NAME}"
+	COMMENT "Creating symlink ${CMAKE_SOURCE_DIR}/graphs/${PROJECT_NAME}"
+  )
 endif()
 
 # add_custom_target(copy_compile_commands
@@ -135,7 +143,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     ${GCC14_INCLUDE_DIR}/backward
   )
   target_compile_options(${PROJECT_NAME} PRIVATE
-	-fopt-info-loop  
+	-fopt-info-loop
   )
   if (CMAKE_BUILD_TYPE STREQUAL "Release")
 	target_compile_options(${PROJECT_NAME} PRIVATE
@@ -163,7 +171,7 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
       --config ${MP_CLANG_CONFIG}
     )
   endif()
-  
+
   target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CONFIG:Debug>:${SANITIZER_FLAGS}>
   )

@@ -10,3 +10,9 @@
 -Woverloaded-virtual
 -Wsign-conversion
 -Wpessimizing-move
+-isystem /opt/local/libexec/llvm-19/include/c++/v1
+-isystem /opt/local/libexec/llvm-19/lib/clang/19/include
+-I/opt/local/include
+-I/opt/local/libexec/tbb/include/tbb
+-mmacosx-version-min=10.15
+-D_LIBCPP_DISABLE_AVAILABILITY
