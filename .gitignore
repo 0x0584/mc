@@ -24,3 +24,4 @@ mc
 /.cache/
 /max-clique-Debug
 /max-clique-Release
+/max-clique-RelWithDebInfo

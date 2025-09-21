@@ -12,103 +12,110 @@ os.makedirs(output_dir, exist_ok=True)
 threads = 4
 runs_per_graph = 5
 binary = "max-clique"
-
 graph_groups = {
-    "tiny": [
-        "C125.9.clq",
-        # "MANN-a9.mtx",
-        # "brock200-1.mtx",
-        # "brock200-3.mtx",
-        # "brock200_2.clq",
-        # "brock200_4.clq",
-        "c-fat200-1.mtx",
-        # "c-fat200-2.mtx",
-        # "c-fat200-5.mtx",
-        # "c-fat500-1.mtx",
-        # "c-fat500-2.mtx",
-        # "gen200-p0-9-44.mtx",
-        "hamming8-4.clq",
-        # "johnson16-2-4.mtx",
-        "johnson8-2-4.mtx",
-        # "keller4.clq",
-        "p_hat300-1.clq",
-        # "p_hat300-2.clq",
-    ],
-    "small": [
-        # "C250-9.mtx",
-        # "DSJC500-5.mtx",
-        # "MANN-a27.mtx",
-        "brock400-2.mtx",
-        # "c-fat500-10.mtx",
-        # "c-fat500-5.mtx",
-        # "inf-luxembourg_osm.mtx",
-        "johnson32-2-4.mtx",
-        "p-hat1000-1.mtx",
-        # "p-hat300-3.mtx",
-        # "p-hat500-1.mtx",
-        # "p-hat500-2.mtx",
-        "p-hat500-3.mtx",
-        # "p-hat700-1.mtx",
-        "p-hat700-2.mtx",
-    ],
-    "medium": [
-        # "C1000-9.mtx",
-        "MANN-a45.mtx",
-        # "brock800-4.mtx",
-        # "ca-AstroPh.mtx",
-        "hamming10-4.mtx",
-        # "keller5.mtx",
-        # "p-hat1000-2.mtx",
-        "p-hat1000-3.mtx",
-        # "p-hat1500-1.mtx",
-        # "p-hat1500-2.mtx",
-        # "p-hat700-3.mtx",
-        # "rgg_n_2_15_s0.mtx",
-        "rgg_n_2_17_s0.mtx",
-        # "san1000.mtx",
-        # "soc-slashdot.mtx",
-    ],
-    "large": [
-        "C2000-9.mtx",
-        # "C4000-5.mtx",
-        # "MANN-a81.mtx",
-        # "adaptive.mtx",
-        # "inf-asia_osm.mtx",
-        # "inf-belgium_osm.mtx",
-        # "inf-germany_osm.mtx",
-        # "inf-great-britain_osm.mtx",
-        "inf-netherlands_osm.mtx",
-        "keller6.mtx",
-        "m14b.mtx",
-        "p-hat1500-3.mtx",
-        # "rgg_n_2_19_s0.mtx",
-        # "rgg_n_2_20_s0.mtx",
-    ],
-    "huge": [
-        # "delaunay_n24.mtx",
-        "hugetrace-00020.mtx",
-        # "inf-europe_osm.mtx",
-        # "inf-road_central.mtx",
-        # "inf-road_usa.mtx",
-        "kron_g500-logn20.mtx",
-        "packing-500x100x100-b050.mtx",
-        "rgg_n_2_22_s0.mtx",
-    ],
-    "massive": ["kron_g500-logn21.mtx", "rgg_n_2_24_s0.mtx"],
+    "small": {
+        # <~1K vertices, <~20K edges — fits in cache, dominated by fixed overheads
+        "low density": [
+            "johnson8-2-4.mtx",  # v=28, e=210. Very small, symmetric; correctness checks.
+            "c-fat200-1.mtx",  # v=200, e=1534. Sparse planted clique.
+            "c-fat200-2.mtx",  # v=200, e=3235. Slightly denser planted clique.
+            "c-fat500-1.mtx",  # v=500, e=4459. Sparse, larger vertex set.
+            "johnson16-2-4.mtx",  # v=120, e=5460. Symmetric, validation target.
+            "c-fat500-2.mtx",  # v=500, e=9139. Medium sparse planted clique.
+            "c-fat500-5.mtx",  # v=500, e=23191. Denser planted clique.
+        ],
+        "medium-high density": [
+            "c125.9.clq",  # v=125, e=6963. Medium density, large planted clique.
+            "keller4.clq",  # v=171, e=9435. Structured, challenging.
+            "brock200_2.clq",  # v=200, e=9876. Many large near-cliques.
+            "brock200-3.mtx",  # v=200, e=12048. Dense, hard instance.
+            "brock200-1.mtx",  # v=200, e=14834. Densest brock200 variant.
+            "brock200-4.clq",  # v=200, e=13089. Another brock200 variant.
+            "gen200-p0-9-44.mtx",  # v=200, e=17910. Random dense.
+            "p_hat300-1.clq",  # v=300, e=10933. Sparse random.
+            "p_hat300-2.clq",  # v=300, e=21928. Denser random.
+        ],
+    },
+    "medium": {
+        # ~1K–10K vertices, 10K–500K edges — parse cost visible, memory still modest
+        "low density": [
+            "p-hat1000-1.mtx",  # v=1000, e=122253. Large sparse random.
+            "p-hat1500-1.mtx",  # v=1500, e=284923. Sparse random.
+            "p-hat500-1.mtx",  # v=500, e=31569. Sparse random.
+            "p-hat700-1.mtx",  # v=700, e=60999. Sparse random.
+        ],
+        "medium-high density": [
+            "brock400-2.mtx",  # v=400, e=59786. Larger brock, hard.
+            "brock400-4.mtx",  # v=400, e=59765. Variant of brock400-2.
+            "brock800-4.mtx",  # v=800, e=207643. Very large brock.
+            "brock800-2.mtx",  # v=800, e=208166. Variant of brock800-4.
+            "p-hat1000-3.mtx",  # v=1000, e=371746. Large dense random.
+            "p-hat1500-3.mtx",  # v=1500, e=1681696. Dense random.
+            "p-hat500-3.mtx",  # v=500, e=121925. Dense random.
+            "p-hat700-3.mtx",  # v=700, e=244799. Dense random.
+            "hamming10-4.mtx",  # v=1024, e=434176. Large structured Hamming.
+            "hamming10-2.mtx",  # v=1024, e=5120. Sparse structured Hamming.
+            "MANN-a9.mtx",  # v=45, e=918. Small structured MANN.
+            "MANN-a27.mtx",  # v=378, e=7020. Structured MANN.
+            "MANN-a45.mtx",  # v=1035, e=19890. Structured MANN.
+            "MANN-a81.mtx",  # v=3321, e=63720. Structured MANN.
+            "adaptive.mtx",  # Synthetic adaptive graph.
+            "m14b.mtx",  # Synthetic benchmark graph.
+            "packing-500x100x100-b050.mtx",  # Packing problem graph.
+            "san1000.mtx",  # v=1000, e=250500. Dense synthetic.
+        ],
+    },
+    "large": {
+        # 10K–1M vertices, 200K–5M edges — I/O and parse both significant
+        "dense and structured": [
+            "keller5.mtx",  # v=776, e=225990. Dense structured.
+            "keller6.mtx",  # v=3361, e=4619898. Dense, structured, high complexity.
+            "C1000-9.mtx",  # v=1000, e=450450. Dense planted clique.
+            "C2000-9.mtx",  # v=2000, e=1799532. Large planted clique.
+            "C4000-5.mtx",  # v=4000, e=4000268. Massive, small clique.
+            "kron_g500-logn20.mtx",  # Kronecker synthetic, skewed degree.
+            "kron_g500-logn21.mtx",  # Larger Kronecker synthetic.
+        ],
+        "real-world and geometric": [
+            "ca-AstroPh.mtx",  # v=17903, e=196972. Collaboration network.
+            "soc-slashdot.mtx",  # v=70068, e=358647. Social network, skewed degree.
+            "hugetrace-00020.mtx",  # Large trace graph.
+            "inf-asia_osm.mtx",  # Road network, planar.
+            "inf-belgium_osm.mtx",  # Road network, planar.
+            "inf-europe_osm.mtx",  # Road network, planar.
+            "inf-germany_osm.mtx",  # Road network, planar.
+            "inf-great-britain_osm.mtx",  # Road network, planar.
+            "inf-luxembourg_osm.mtx",  # Road network, planar.
+            "inf-netherlands_osm.mtx",  # Road network, planar.
+            "inf-road_central.mtx",  # Road network, planar.
+        ],
+        "synthetic geometric": [
+            "rgg_n_2_15_s0.mtx",  # Random geometric, small.
+            "rgg_n_2_16_s0.mtx",
+            "rgg_n_2_17_s0.mtx",
+            "rgg_n_2_18_s0.mtx",
+            "rgg_n_2_19_s0.mtx",
+            "rgg_n_2_20_s0.mtx",
+            "rgg_n_2_22_s0.mtx",
+            "rgg_n_2_23_s0.mtx",
+        ],
+    },
+    "huge": {
+        # >10M vertices, tens to hundreds of millions of edges — I/O-bound, memory locality critical
+        "extreme scale": [
+            "delaunay_n24.mtx",  # v=16777216, e=50331601. Massive geometric mesh.
+            "inf-road_usa.mtx",  # v=23947347, e=28854312. Sparse road network.
+            "rgg_n_2_24_s0.mtx",  # v=16777216, e=132557200. Largest random geometric.
+        ],
+    },
 }
 
-selected_groups = [
-    "tiny",
-    "small",
-    "medium",
-    "large",
-    "huge",
-    "massive",
-]
+selected_groups = ["small", "medium", "large", "huge"]
 
 graphs = []
 for group in selected_groups:
-    graphs.extend(graph_groups[group])
+    for subgroup in graph_groups[group]:
+        graphs.extend(graph_groups[group][subgroup])
 
 graph_name_padding = max(len(graph) for graph in graphs) + 2
 
@@ -301,12 +308,13 @@ def run_once(graph_path):
             sample_times.append(ts)
         except psutil.NoSuchProcess:
             break
+
     elapsed = time.time_ns() - proc_start_time
     stdout, stderr = proc.communicate()
     output = (stdout or "") + (stderr or "")
 
     if proc.returncode != 0:
-        print(f"ERROR: Non-zero exit for {graph_path}")
+        print(f"ERROR: {proc.returncode} exit for {graph_path}")
         print(output)
         return None
 

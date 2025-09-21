@@ -25,7 +25,7 @@ else
  CXXFLAGS += -DDEBUG -O2 -g3
 endif
 
-all: build-release build-debug
+all: build-release build-reldeb build-debug
 
 build:
 	@cmake -B $(BUILD_DIR) \
@@ -45,7 +45,7 @@ build-release:
         -DLOG_LEVEL=info \
 		-DSANITIZE=$(SANITIZE) \
 		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
-		-DENABLE_PROFILING=$(ENABLE_PROFILING)
+		-DENABLE_PROFILING=OFF
 	@make -C $(BUILD_DIR)/Release -j$(JOBS)
 
 build-debug:
@@ -56,8 +56,21 @@ build-debug:
         -DLOG_LEVEL=debug\
 		-DSANITIZE=$(SANITIZE) \
 		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
-		-DENABLE_PROFILING=$(ENABLE_PROFILING)
+		-DENABLE_PROFILING=ON \
+		-DGC_ENABLE_MEMORY_TRACKING=ON
 	@make -C $(BUILD_DIR)/Debug -j$(JOBS)
+
+build-reldeb:
+	@cmake -B $(BUILD_DIR)/RelWithDebInfo \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_CXX_COMPILER=$(CXX) \
+        -DTHREADS_PER_CORE=$(THREADS_PER_CORE) \
+        -DLOG_LEVEL=debug\
+		-DSANITIZE=$(SANITIZE) \
+		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
+		-DENABLE_PROFILING=ON \
+		-DGC_ENABLE_MEMORY_TRACKING=ON
+	@make -C $(BUILD_DIR)/RelWithDebInfo -j$(JOBS)
 
 compile:
 	@make -C $(BUILD_DIR) -j$(JOBS)
@@ -84,4 +97,4 @@ clean:
 
 re: clean all
 
-.PHONY: all build build-release build-debug compile test test-release test-debug clean re
+.PHONY: all build build-release build-reldeb build-debug compile test test-release test-debug clean re

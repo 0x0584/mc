@@ -82,9 +82,67 @@ void args::parse(int argc, char *argv[]) {
 }
 
 feed::feed(input_source &in, std::size_t num_jobs)
-    : in(in), buffs(feed_jobs_scale(num_jobs)),
-      idxs(feed_jobs_scale(num_jobs)) {
-  std::iota(idxs.begin(), idxs.end(), 0ul);
+    : in(in), batch_size(feed_jobs_scale(num_jobs)),
+      remaining(memory::allocate<char>(BUFF_SIZE)), begin_rem(remaining),
+      tail_rem(remaining), buffs(batch_size), read_idxs(batch_size),
+      chunks(batch_size, {nullptr, nullptr, -1ul, this}) {
+  for (auto &buff : buffs) {
+    buff = memory::allocate<char>(BUFF_SIZE);
+  }
+  std::iota(read_idxs.begin(), read_idxs.end(), 0ul);
+  fetch_idxs.reserve(batch_size);
+  reader = std::jthread([this] mutable {
+    std::pmr::vector<std::size_t> batch(memory::pool());
+    batch.reserve(batch_size);
+    while (true) {
+      {
+        std::unique_lock lk(recycle_mtx);
+        recycle_cv.wait(lk,
+                        [this] { return !read_idxs.empty() || !reading(); });
+        if (!reading()) [[unlikely]] {
+          std::size_t size = static_cast<std::size_t>(tail_rem - begin_rem);
+          if (size != 0) {
+            Assert(!read_idxs.empty());
+            std::size_t idx = read_idxs.back();
+            buffer buff = buffs[idx];
+
+            std::memcpy(buff, begin_rem, size);
+
+            chunks[idx].begin = buff;
+            chunks[idx].end = buff + size;
+            chunks[idx].idx = idx;
+
+            tail_rem = begin_rem;
+
+            {
+              std::scoped_lock fk(fetch_mtx);
+              fetch_idxs.push_back(idx);
+              fetch_cv.notify_one();
+            }
+          }
+          {
+            std::scoped_lock fk(fetch_mtx);
+            done.store(true, std::memory_order_release);
+            fetch_cv.notify_all();
+          }
+          break;
+        }
+        logger::warn("read batch", logger::number_unit(read_idxs.size()));
+        batch.insert(batch.end(), read_idxs.begin(), read_idxs.end());
+        read_idxs.clear();
+      }
+#pragma unroll 8
+      for (std::size_t i = 0; i < batch.size(); i++) {
+        if (reading()) [[likely]] {
+          read_chunk(batch[i]);
+        } else {
+          break;
+        }
+      }
+      batch.clear();
+    }
+  });
+
   logger::debug("Feed has", feed_jobs_scale(num_jobs), "buffers for", num_jobs,
                 "jobs");
 
@@ -96,12 +154,15 @@ feed::feed(input_source &in, std::size_t num_jobs)
   logger::info("Stream Size", logger::size_unit(args::stream_size()),
                "and Chunk Size", logger::size_unit(BUFF_SIZE));
   logger::info("Estimating", logger::number_unit(estimated_chunks),
-               "Chunks with",
-               logger::number_unit(std::min(edges_per_chunk, in.num_e)),
+               "Chunks with", logger::number_unit(edges_per_chunk),
                "Edges per Chunk");
 }
 
 feed::~feed() {
+  memory::deallocate(remaining);
+  for (auto &buff : buffs) {
+    memory::deallocate(buff);
+  }
   if (tail_rem != begin_rem) {
     // FIXME: use either exceptions or logger::error
     logger::error("INVALID file: no NL at the end of the file");
@@ -141,55 +202,77 @@ static inline char const *last_delimiter(char const *__restrict base,
 #undef BLOCK_SCAN
 }
 
-feed::chunk feed::read_chunk() {
+feed::chunk feed::fetch_chunk() {
+  thread_local auto last = std::chrono::high_resolution_clock::now();
+
   std::size_t idx;
   {
-    std::unique_lock lk(mtx);
-    recycle_cv.wait(lk, [this] { return !idxs.empty() || !reading(); });
-    if (!reading()) [[unlikely]] {
+    std::unique_lock lk(fetch_mtx);
+    fetch_cv.wait(lk, [this] {
+      return !fetch_idxs.empty() || done.load(std::memory_order_acquire);
+    });
+    if (fetch_idxs.empty() && done.load(std::memory_order_acquire))
+        [[unlikely]] {
       return {nullptr, nullptr, 0, this};
     }
-    idx = idxs.back();
-    logger::debug("available buffer", idx);
-    idxs.pop_back();
+    idx = fetch_idxs.back();
+    fetch_idxs.pop_back();
   }
 
-  buffer &buff = buffs[idx];
-  buff.reserve(BUFF_SIZE);
+  auto now = std::chrono::high_resolution_clock::now();
+  chunks[idx].fetch_t = now - last;
+  last = now;
 
-  char *base = buff.data();
+  return chunks[idx];
+}
+
+void feed::read_chunk(std::size_t idx) {
+  thread_local auto last = std::chrono::high_resolution_clock::now();
 
   Assert(tail_rem >= begin_rem);
   std::size_t total_sz = static_cast<std::size_t>(tail_rem - begin_rem);
   Assert(total_sz <= BUFF_SIZE);
-  if (total_sz) [[likely]] {
+
+  buffer base = buffs[idx];
+  if (total_sz) {
     std::memcpy(base, begin_rem, total_sz);
   }
 
   const std::size_t to_read = BUFF_SIZE - total_sz;
   in->read(base + total_sz, static_cast<std::streamsize>(to_read));
-  if (in->bad()) [[unlikely]] {
+  if (in->bad()) {
     logger::error("FAILURE: cannot read from stream");
   }
 
-  const std::size_t size_read = static_cast<std::size_t>(in->gcount());
-  total_sz += size_read;
-
+  total_sz += static_cast<std::size_t>(in->gcount());
   char *tail = base + total_sz;
-  char const *deli = last_delimiter(base, tail);
-  if (!deli) [[unlikely]] {
-    logger::error("FAILURE:", BUFF_SIZE,
-                  "exceeded! recompile with a bigger size");
+
+  const char *deli = last_delimiter(base, tail);
+  if (!deli) {
+    throw std::runtime_error("Record exceeds BUFF_SIZE");
   }
 
   const std::size_t size = static_cast<std::size_t>(deli - base);
   const char *after_nl = (deli < tail) ? deli + 1 : tail;
   const std::size_t spill = static_cast<std::size_t>(tail - after_nl);
-  if (spill) [[likely]] {
+  if (spill) {
     std::memcpy(begin_rem, after_nl, spill);
   }
   tail_rem = begin_rem + spill;
 
-  return {base, base + size, idx, this};
+  chunks[idx].begin = base;
+  chunks[idx].end = base + size;
+  chunks[idx].idx = idx;
+
+  auto now = std::chrono::high_resolution_clock::now();
+  chunks[idx].read_t = now - last;
+  last = now;
+
+  {
+    std::scoped_lock lk(fetch_mtx);
+    fetch_idxs.push_back(idx);
+    fetch_cv.notify_one();
+  }
 }
+
 } // namespace mc
