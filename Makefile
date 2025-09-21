@@ -25,6 +25,8 @@ else
  CXXFLAGS += -DDEBUG -O2 -g3
 endif
 
+all: build-release build-debug
+
 build:
 	@cmake -B $(BUILD_DIR) \
 		-DCMAKE_BUILD_TYPE=$(BUILD) \
@@ -35,13 +37,27 @@ build:
 		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
 		-DENABLE_PROFILING=$(ENABLE_PROFILING)
 
-build-release: BUILD=Release
-build-release: LOG_LEVEL=info
-build-release: build
+build-release:
+	@cmake -B $(BUILD_DIR)/Release \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER=$(CXX) \
+        -DTHREADS_PER_CORE=$(THREADS_PER_CORE) \
+        -DLOG_LEVEL=info \
+		-DSANITIZE=$(SANITIZE) \
+		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
+		-DENABLE_PROFILING=$(ENABLE_PROFILING)
+	@make -C $(BUILD_DIR)/Release -j$(JOBS)
 
-build-debug: BUILD=Debug
-build-debug: LOG_LEVEL=debug
-build-debug: build
+build-debug:
+	@cmake -B $(BUILD_DIR)/Debug \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_CXX_COMPILER=$(CXX) \
+        -DTHREADS_PER_CORE=$(THREADS_PER_CORE) \
+        -DLOG_LEVEL=debug\
+		-DSANITIZE=$(SANITIZE) \
+		-DSTATIC_ANALYZER=$(STATIC_ANALYZER) \
+		-DENABLE_PROFILING=$(ENABLE_PROFILING)
+	@make -C $(BUILD_DIR)/Debug -j$(JOBS)
 
 compile:
 	@make -C $(BUILD_DIR) -j$(JOBS)
@@ -66,6 +82,6 @@ test-debug: build test
 clean:
 	@rm -rf $(BUILD_DIR)
 
-re: clean build test-again
+re: clean all
 
-.PHONY: build build-release build-debug compile test test-release test-debug clean re
+.PHONY: all build build-release build-debug compile test test-release test-debug clean re

@@ -37,14 +37,14 @@
 using namespace std::chrono_literals;
 
 namespace mc {
-std::pmr::vector<vertex> multithreaded::solve(flavour algo,
-                                              std::size_t lower_bound,
-                                              std::size_t upper_bound) {
-  if (assert(lower_bound <= upper_bound); upper_bound > 1) {
+std::pmr::vector<graph::vertex> multithreaded::solve(flavour algo,
+                                                     std::size_t lower_bound,
+                                                     std::size_t upper_bound) {
+  if (Assert(lower_bound <= upper_bound); upper_bound > 1) {
     // TODO: clean up global variables
     overall_size = lower_bound > 0 ? lower_bound - 1 : 0;
     solution(algo, upper_bound);
-  } else if (assert(G.vertex_count()); upper_bound == 1) {
+  } else if (Assert(G.vertex_count()); upper_bound == 1) {
     max_clique.emplace_back(0);
   }
 
@@ -53,7 +53,7 @@ std::pmr::vector<vertex> multithreaded::solve(flavour algo,
   }
 
   // reverse the keys back into vertices, as they were enumerated beforehand
-  std::pmr::vector<vertex> clique = G.to_vertex(max_clique);
+  std::pmr::vector<graph::vertex> clique = G.to_vertex(max_clique);
 
   if (algo != flavour::heuristic) {
     if (max_clique.size() < lower_bound) {
@@ -104,7 +104,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
-  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>> keys;
+  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>> keys;
   {
     std::pmr::vector<graph::key> tmp(memory::pool());
     tmp.reserve(G.vertex_count());
@@ -182,21 +182,37 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
         return;
       }
 
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<mc::colour>>
+      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
           sorted_neighs;
       {
         // make_scope_timer(sorted_neighs_timer);
-        std::pmr::unordered_set<graph::key> all_neighs = G.neighbours(key);
-        // XXX: use iterator instead to avoid blocking threads
-        for (auto j = keys.first.size() - 1; j > i; --j) {
-          all_neighs.erase(keys.first[j]);
+        auto [first, last] = G.neighbours(key);
+        std::pmr::vector<graph::key> neighs(first, last, memory::pool());
+        if ((i + 1) < keys.first.size()) [[likely]] {
+          std::pmr::vector<std::size_t> remove_neigh(memory::pool());
+          remove_neigh.reserve(keys.first.size() - i);
+          // XXX: use iterator instead to avoid blocking threads
+          for (auto j = keys.first.size() - 1; j > i; --j) {
+            auto it = std::lower_bound(first, last, keys.first[j]);
+            if (it != last) [[likely]] {
+              remove_neigh.emplace_back(static_cast<std::size_t>(it - first));
+            }
+          }
+          if (!remove_neigh.empty()) [[likely]] {
+            std::sort(remove_neigh.begin(), remove_neigh.end());
+            while (!remove_neigh.empty()) {
+              std::size_t idx = remove_neigh.back();
+              remove_neigh.pop_back();
+              std::swap(neighs[idx], neighs.back());
+              neighs.pop_back();
+            }
+            if (neighs.empty()) [[unlikely]] {
+              logger::debug(v, "has no neighbours. abandon branching.");
+              return;
+            }
+          }
         }
-        if (all_neighs.empty()) {
-          logger::debug(v, "has no neighbours. abandon branching.");
-          return;
-        }
-        sorted_neighs = G.colour_sort(std::move(std::pmr::vector<graph::key>(
-            all_neighs.begin(), all_neighs.end(), memory::pool())));
+        sorted_neighs = G.colour_sort(std::move(neighs));
       }
 
       // std::ostringstream oss;
@@ -223,7 +239,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
       std::size_t num_nodes = 0;
       std::pmr::vector<graph::key> clique(memory::pool());
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<mc::colour>>
+      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
           cache(100'000);
       std::size_t cache_hits = 0;
 
@@ -251,7 +267,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
           logger::debug(oss.str());
         }
 
-        assert(clique.size() == overall_size);
+        Assert(clique.size() == overall_size);
         max_clique = std::move(clique);
       }
 
@@ -313,11 +329,12 @@ bool multithreaded::enlarge_clique_size(graph::key key,
 
 void multithreaded::branch_exact(
     graph::key key, graph::key v,
-    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>>
+    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
         &sorted_neighs,
     std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
     std::size_t upper_bound, std::size_t &num_nodes,
-    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<colour>> &cache,
+    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
+        &cache,
     std::size_t &cache_hits, std::size_t depth) {
   num_nodes++;
 
@@ -345,7 +362,7 @@ void multithreaded::branch_exact(
     // vertices we sorted in increasing degeneracy so taking the highest colour
     graph::key u = keys.back();
     keys.pop_back();
-    colour colour = colours.back();
+    graph::colour colour = colours.back();
     colours.back();
     if (depth + colour <= max_clique_size) {
       break;
@@ -399,11 +416,12 @@ void multithreaded::branch_exact(
 
 void multithreaded::branch_heuristic(
     graph::key key, graph::key v,
-    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>>
+    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
         &sorted_neighs,
     std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
     std::size_t upper_bound, std::size_t &num_nodes,
-    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<colour>> &cache,
+    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
+        &cache,
     std::size_t &cache_hits, std::size_t depth) {
   if (upper_bound_reached) {
     return;

@@ -21,3 +21,4 @@ mc
 /.projectile-cache.eld
 *.prof
 /Testing/
+/.cache/

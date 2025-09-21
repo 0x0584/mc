@@ -28,8 +28,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "core.hpp"
 #include "flavour.hpp"
-#include "logger.hpp"
 
 namespace mc {
 struct args {
@@ -69,10 +69,12 @@ struct input {
     if (not args::expect_size && (args::expect_size = fetcher(args::size))) {
       logger::info("Expecting a Max Clique of size", args::size);
     }
-
-    logger::info("Source Graph is",
-                 (args::undirected ? "Undirected" : "Directed"), "with", num_v,
-                 "vertices and", num_e, "edges");
+    if (num_v == 0) {
+      logger::error("Number of Vertices is Zero! abort.");
+    }
+    if (num_e == 0) {
+      logger::error("Number of Edges is Zero! abort.");
+    }
   }
 
   ~input() { logger::debug("~input()"); }
@@ -104,8 +106,10 @@ struct input {
 };
 
 struct feed {
-  static inline const std::int64_t CHUNK_SIZE = 1024 * 1024; // 1MB
-  static inline const char deli = '\n', sep = ' ';
+  static inline constexpr std::size_t CHUNK_SIZE = 1024 * 1024; // 1MB
+  static_assert(CHUNK_SIZE != 0);
+
+  static inline constexpr char deli = '\n', sep = ' ';
 
   using buffer = std::array<char, CHUNK_SIZE>;
 
@@ -113,15 +117,22 @@ struct feed {
   feed(const feed &feed) = delete;
 
   explicit inline feed(input &in)
-      : in(in), tail_remaining(remaining.begin()),
-        _estimate_chunks(1 + args::stream_size() / CHUNK_SIZE),
-        _estimate_num_edges(2.15 * in.num_e / in.num_v),
-        _edges_per_chunk(1.50 * in.num_e / _estimate_chunks) {
+      : in(in), begin_rem(remaining.data()), tail_rem(remaining.data()) {
     std::memset(remaining.data(), 0x00, remaining.size());
+    const std::size_t _estimate_chunks = 1 + args::stream_size() / CHUNK_SIZE;
+    const double avg_edge_line =
+        static_cast<double>(args::stream_size()) / in.num_e;
+    const std::size_t _edges_per_chunk = static_cast<std::size_t>(
+        std::max(1.0, std::floor(CHUNK_SIZE / avg_edge_line)));
+    logger::info("Stream Size", logger::size_unit(args::stream_size()),
+                 "and Chunk Size", logger::size_unit(CHUNK_SIZE));
+    logger::info("Estimating", logger::number_unit(_estimate_chunks),
+                 "Chunks with", logger::number_unit(_edges_per_chunk),
+                 "Edges per Chunk");
   }
 
   ~feed() {
-    if (tail_remaining != remaining.begin()) {
+    if (tail_rem != begin_rem) {
       // FIXME: use either exceptions or logger::error
       logger::error("INVALID file: no NL at the end of the file");
     }
@@ -130,13 +141,24 @@ struct feed {
 
   inline operator bool() { return reading(); }
 
-  inline std::size_t estimate_chunks() const { return _estimate_chunks; }
-  inline std::size_t estimate_num_edges() const { return _estimate_num_edges; }
-  inline std::size_t edges_per_chunk() const { return _edges_per_chunk; }
+  // inline std::size_t estimate_chunks() const { return _estimate_chunks; }
+  // inline std::size_t estimate_num_edges() const { return _estimate_num_edges;
+  // } inline std::size_t edges_per_chunk() const { return _edges_per_chunk; }
   inline std::size_t num_vertices() const { return in.num_v; }
   inline std::size_t num_edges() const { return in.num_e; }
 
-  std::string read_chunk();
+  struct buffer_content {
+    friend feed;
+
+    buffer::const_iterator begin() const { return buff.begin(); }
+    buffer::const_iterator end() const { return buff.begin() + size; }
+
+  private:
+    buffer buff;
+    std::size_t size;
+  };
+
+  buffer_content read_chunk();
 
 private:
   inline bool reading() {
@@ -146,23 +168,16 @@ private:
     return not in->eof() && not in->fail();
   }
 
-  inline std::pair<buffer, const std::streamsize>
-  read_next(std::streamsize size_read) {
-    buffer read;
-    if (in->read(read.data(), size_read); in->bad()) {
-      logger::error("FAILURE: cannot read from stream");
-    }
-    return {read, in->gcount()};
-  }
-
   input &in;
-  buffer remaining{};
-  buffer::iterator tail_remaining;
+  buffer remaining;
+  char *begin_rem;
+  char *tail_rem;
 
-  const std::size_t _estimate_chunks;
-  const std::size_t _estimate_num_edges;
-  const std::size_t _edges_per_chunk;
+  // const std::size_t _estimate_chunks;
+  // const std::size_t _estimate_num_edges;
+  // const std::size_t _edges_per_chunk;
 };
 } // namespace mc
+// namespace mc
 
 #endif // INPUT_HPP

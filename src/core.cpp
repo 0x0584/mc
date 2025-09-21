@@ -32,18 +32,18 @@ std::pmr::synchronized_pool_resource *pool() {
 } // namespace memory
 
 scope_dtor logger::setup_logger() {
-  std::cout << std::fixed << std::setprecision(3) << std::left;
-  std::cerr << std::fixed << std::setprecision(3) << std::left;
-  std::cerr << "Logging started at " << std::chrono::system_clock::now() << '\n'
-            << "Logging level is set to " << get_level_str(current_level)
-            << '\n';
+  {
+    std::ostringstream oss;
+    oss << "Logging started at " << std::chrono::system_clock::now() << '\n'
+        << "Logging level is set to " << get_level_str(current_level) << '\n';
+    puts(oss.str(), stderr);
+  }
   logger_thread = std::thread([] {
     std::pmr::list<log_entry> log_processing;
-
     while (true) {
       {
-        std::unique_lock queue_lock(queue_mtx);
-        logger_cv.wait_for(queue_lock, std::chrono::milliseconds(100), [] {
+        std::unique_lock lk(queue_mtx);
+        logger_cv.wait_for(lk, std::chrono::milliseconds(100), [] {
           bool ready = stop_logger || not log_queue.empty();
           if (std::scoped_lock flush_lock(flush_mtx); flush_logs && !ready) {
             flush_logs = false;
@@ -78,30 +78,30 @@ scope_dtor logger::setup_logger() {
         print_log_id++;
       }
       {
-        std::scoped_lock print_lock(print_mtx);
-        std::cerr << std::move(oss.str());
+        std::scoped_lock lk(stderr_mtx);
+        puts(oss.str(), stderr);
       }
       {
-        std::scoped_lock flush_lock(flush_mtx);
+        std::scoped_lock lk(flush_mtx);
         if (flush_logs && log_processing.empty()) {
           flush_logs = false;
           flush_cv.notify_one();
         }
       }
     }
-    std::cerr << "Logging finished at " << std::chrono::system_clock::now()
-              << '\n';
+    std::ostringstream oss;
+    oss << "Logging finished at " << std::chrono::system_clock::now() << '\n';
+    puts(oss.str(), stderr);
   });
 
   return scope_dtor([] {
     {
-      std::scoped_lock lock(queue_mtx);
+      std::scoped_lock lk(queue_mtx);
       stop_logger = true;
       logger_cv.notify_one();
     }
     if (logger_thread.joinable()) {
       logger_thread.join();
     }
-    std::cerr << std::flush;
   });
 }

@@ -47,22 +47,24 @@ void print(const char *s, auto &key_cols) {
   logger::warn(s, key_cols.highest_colour());
 }
 
-// void is_valid_colouring(const char *str, auto &key_cols, const graph &g) {
-//   std::pmr::unordered_map<graph::key, mc::colour> ktoc(
-//       memory::pool());
-//   ktoc.reserve(key_cols.size());
+/*
+  void is_valid_colouring(const char *str, auto &key_cols, const graph &g) {
+  std::pmr::unordered_map<graph::key, graph::colour> ktoc(
+      memory::pool());
+  ktoc.reserve(key_cols.size());
 
-//   for (const auto &[u, u_col] : key_cols) {
-//     ktoc.emplace(u, u_col);
-//   }
+  for (const auto &[u, u_col] : key_cols) {
+    ktoc.emplace(u, u_col);
+  }
 
-//   for (const auto &[u, u_col] : ktoc) {
-//     for (auto v : e.neighbours(u, {})) {
-//       enumerator::colour v_col = ktoc[v];
-//       assert(u_col != v_col, str, u_col, "should not be", v_col);
-//     }
-//   }
-// }
+  for (const auto &[u, u_col] : ktoc) {
+    for (auto v : e.neighbours(u, {})) {
+      enumerator::colour v_col = ktoc[v];
+      assert(u_col != v_col, str, u_col, "should not be", v_col);
+    }
+  }
+  }
+*/
 
 int main(int argc, char *argv[]) {
   std::set_terminate([] {
@@ -84,16 +86,16 @@ int main(int argc, char *argv[]) {
   graph_builder builder(in);
   graph g = builder.build(args::undirected);
 
-  // auto start = std::chrono::system_clock::now();
+  auto start = std::chrono::system_clock::now();
 
-  // profiler_start("colour.prof");
-  // auto cols = g.colour_sort(gen_keys(g.vertex_count()));
-  // profiler_stop();
+  profiler_start("colour.prof");
+  auto cols = g.colour_sort(gen_keys(g.vertex_count()));
+  profiler_stop();
 
-  // auto end = std::chrono::system_clock::now();
-  // logger::warn("dsatur done in", logger::time_diff(start, end));
+  auto end = std::chrono::system_clock::now();
+  logger::warn("dsatur done in", logger::time_diff(start, end));
 
-  // return 42;
+  return 42;
 
   multithreaded algo(g);
   for (long turn = 1; turn <= args::num_turns; ++turn) {
@@ -102,12 +104,12 @@ int main(int argc, char *argv[]) {
     }
 
     auto clique = algo.solve(args::exec_mode);
-    std::pmr::vector<vertex> sorted_clique(clique.cbegin(), clique.cend(),
-                                           memory::pool());
+    std::pmr::vector<graph::vertex> sorted_clique(
+        clique.cbegin(), clique.cend(), memory::pool());
     std::sort(sorted_clique.begin(), sorted_clique.end());
     std::ostringstream oss;
     oss << "Max Clique has " << sorted_clique.size() << " vertices { ";
-    for (vertex v : sorted_clique) {
+    for (const graph::vertex &v : sorted_clique) {
       oss << v << " ";
     }
     oss << "}";

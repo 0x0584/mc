@@ -84,26 +84,29 @@ private:
 
   void branch_exact(
       graph::key key, graph::key v,
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>>
+      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
           &sorted_neighs,
       std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
       std::size_t upper_bound, std::size_t &num_nodes,
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<colour>> &cache,
+      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
+          &cache,
       std::size_t &cache_hits, std::size_t depth = 1);
 
   void branch_heuristic(
       graph::key key, graph::key v,
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>>
+      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
           &sorted_neighs,
       std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
       std::size_t upper_bound, std::size_t &num_nodes,
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<colour>> &cache,
+      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
+          &cache,
       std::size_t &cache_hits, std::size_t depth = 1);
 
-  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<colour>> colour_sort(
-      const std::pmr::vector<graph::key> &neighs,
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<colour>> &cache,
-      std::size_t &cache_hits) const {
+  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
+  colour_sort(const std::pmr::vector<graph::key> &neighs,
+              lru_cache<std::pmr::vector<graph::key>,
+                        std::pmr::vector<graph::colour>> &cache,
+              std::size_t &cache_hits) const {
     static thread_local size_t cache_hits_mod = 10'000;
     auto precomputed = cache.get(neighs);
     if (precomputed.has_value()) {
@@ -128,7 +131,7 @@ public:
 
   ~multithreaded() { logger::debug("~multithreaded()"); }
 
-  std::pmr::vector<vertex>
+  std::pmr::vector<graph::vertex>
   solve(flavour algo = flavour::exact,
         // the expected behaviour is (as far as I have tested) the function call
         // with be launched with the up-to-date values, even though the it seems
@@ -136,7 +139,7 @@ public:
         std::size_t lower_bound = args::lower_bound,
         std::size_t upper_bound = args::upper_bound);
 
-  void draw(const std::pmr::vector<vertex> &clique) { // E.draw(clique);
+  void draw(const std::pmr::vector<graph::vertex> &clique) { // E.draw(clique);
   }
 };
 } // namespace mc
