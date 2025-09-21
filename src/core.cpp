@@ -25,7 +25,7 @@ std::uint16_t __get_thread_id() {
 }
 
 namespace memory {
-std::pmr::unsynchronized_pool_resource *pool() {
+std::pmr::synchronized_pool_resource *pool() {
   thread_local gc mem(__get_thread_id());
   return mem.get_pool();
 }
@@ -36,7 +36,7 @@ scope_dtor logger::setup_logger() {
     std::ostringstream oss;
     oss << "Logging started at " << std::chrono::system_clock::now() << '\n'
         << "Logging level is set to " << get_level_str(current_level) << '\n';
-    locked_puts(oss.str(), stderr);
+    puts_stderr(oss.str());
   }
   logger_thread = std::thread([] {
     std::pmr::list<log_entry> log_processing;
@@ -77,7 +77,7 @@ scope_dtor logger::setup_logger() {
         log_processing.pop_front();
         print_log_id++;
       }
-      locked_puts(oss.str(), stderr);
+      puts_stderr(oss.str());
       {
         std::scoped_lock lk(flush_mtx);
         if (flush_logs && log_processing.empty()) {
@@ -88,7 +88,7 @@ scope_dtor logger::setup_logger() {
     }
     std::ostringstream oss;
     oss << "Logging finished at " << std::chrono::system_clock::now() << '\n';
-    locked_puts(oss.str(), stderr);
+    puts_stderr(oss.str());
   });
 
   return scope_dtor([] {

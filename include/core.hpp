@@ -20,11 +20,17 @@
 #ifndef CORE_HPP
 #define CORE_HPP
 
+#include <cxxabi.h>
+#include <execinfo.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
+
 #include <functional>
 #include <future>
 #include <iomanip>
@@ -40,8 +46,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <cxxabi.h>
-#include <execinfo.h>
 #include <type_traits>
 
 std::uint16_t __get_thread_id();
@@ -92,14 +96,21 @@ inline ostream &operator<<(ostream &oss, const pair<T, U> &p) {
 }
 } // namespace std
 
-static inline void locked_puts(const std::string &s, auto strm) {
-  locked_puts(s.c_str(), strm);
+// FIXME: refactor this
+static inline void to_stdout(const char *s, std::size_t sz) {
+  ::write(STDOUT_FILENO, s, sz);
 }
 
-static inline void locked_puts(const char *s, auto strm) {
-  flockfile(strm);
-  std::fputs(s, strm);
-  funlockfile(strm);
+static inline void to_stderr(const char *s, std::size_t sz) {
+  ::write(STDERR_FILENO, s, sz);
+}
+
+static inline void puts_stdout(const std::string &str) {
+  to_stdout(str.c_str(), str.size());
+}
+
+static inline void puts_stderr(const std::string &str) {
+  to_stderr(str.c_str(), str.size());
 }
 
 // TODO: unify the coding style
@@ -209,8 +220,7 @@ public:
     return fmt_val;
   }
 
-  template <typename Chrono>
-  static inline auto duration(Chrono begin, Chrono end) {
+  template <typename Chrono> static inline auto duration(Chrono ts) {
     static constexpr std::array<std::pair<long long, const char *>, 7> units = {
         {{86'400'000'000'000LL, "day"},
          {3'600'000'000'000LL, "hours"},
@@ -221,19 +231,25 @@ public:
          {1LL, "ns"}}};
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3) << std::left;
-    auto stamp =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
-            .count();
+    auto stamp = ts.count();
+    unsigned unit_idx = 6;
 #pragma unroll 8
     for (unsigned i = 0; i < units.size(); ++i) {
       if (stamp >= units[i].first) {
-        double value = static_cast<double>(stamp) / units[i].first;
-        oss << value << " " << units[i].second
-            << (i < 3 && value >= 2.0 ? "s" : "");
+        unit_idx = i;
         break;
       }
     }
+    double value = static_cast<double>(stamp) / units[unit_idx].first;
+    oss << trim_trailing_zeros(value) << " " << units[unit_idx].second
+        << (unit_idx < 3 && value >= 2.0 ? "s" : "");
     return oss.str();
+  }
+
+  template <typename Chrono>
+  static inline auto duration(Chrono begin, Chrono end) {
+    return duration(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin));
   }
 
   template <typename Units, typename Value>
@@ -241,10 +257,12 @@ public:
                                   const Units &units) {
     double d_val = static_cast<double>(val);
     unsigned unit_index = 0;
+    if (d_val >= scale_factor) {
 #pragma unroll 8
-    while (d_val >= scale_factor && unit_index < units.size() - 1) {
-      d_val /= scale_factor;
-      unit_index++;
+      while (d_val >= scale_factor && unit_index < units.size() - 1) {
+        d_val /= scale_factor;
+        unit_index++;
+      }
     }
     std::ostringstream oss;
     oss << trim_trailing_zeros(d_val) << " " << units[unit_index];
@@ -252,9 +270,8 @@ public:
   }
 
   static inline std::string number_unit(std::size_t val) {
-    if (val < 1000)
-      return trim_trailing_zeros(val);
-    static constexpr std::array<char, 5> units = {'?', 'K', 'M', 'B', 'T'};
+    static constexpr std::array<std::string, 5> units = {"", "K", "M", "B",
+                                                         "T"};
     static constexpr double scale_factor = 1000.0;
     return scale(val, scale_factor, units);
   }
@@ -420,7 +437,7 @@ public:
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
     // FIXME: this is blocking!
-    locked_puts(process_print_message(std::forward<Args>(log_args)...), stdout);
+    puts_stdout(process_print_message(std::forward<Args>(log_args)...));
   }
 
   // verbose print is similar to `print()', but does not separate the parameters
@@ -428,7 +445,7 @@ public:
   template <typename... Args> static void printv(Args &&...log_args) {
     static_assert((is_loggable<std::decay_t<Args>>::value && ...),
                   "operator<< overload missing.");
-    locked_puts(colours::apply(std::forward<Args>(log_args)..., '\n'), stdout);
+    puts_stdout(colours::apply(std::forward<Args>(log_args)..., '\n'));
   }
 
   static inline const auto logger_destoy = logger::setup_logger();
@@ -510,7 +527,7 @@ inline void assert_impl(bool cond, const char *expr_str, Args &&...args) {
 namespace memory {
 // TODO: add a variant for std::pmr::unsynchronized_pool_resource
 // std::pmr::unsynchronized_pool_resource *pool_unsafe();
-std::pmr::unsynchronized_pool_resource *pool();
+std::pmr::synchronized_pool_resource *pool();
 
 template <typename T, typename... Args>
 inline std::shared_ptr<T> make_shared(Args &&...args) {
@@ -543,10 +560,8 @@ template <typename T, typename... Args>
 inline std::unique_ptr<T, deleter<T>> make_unique(Args &&...args) {
   void *memory = pool()->allocate(sizeof(T), alignof(T));
   T *object = new (memory) T(std::forward<Args>(args)...);
-  return std::unique_ptr<T, deleter<T>>(object, PoolDeleter<T>(&pool));
+  return std::unique_ptr<T, deleter<T>>(object, deleter<T>(&pool));
 }
-
-#define GC_ENABLE_MEMORY_TRACKING
 
 #ifdef GC_ENABLE_MEMORY_TRACKING
 struct tracking_resource : std::pmr::memory_resource {
@@ -578,7 +593,7 @@ struct tracking_resource : std::pmr::memory_resource {
       oss << logger::size_unit(sz) << " " << logger::number_unit(count)
           << " allocs\n";
     }
-    locked_puts(oss.str(), stdout);
+    puts_stdout(oss.str());
   }
 
   void *do_allocate(std::size_t bytes, std::size_t alignment) override {
@@ -605,8 +620,12 @@ struct tracking_resource : std::pmr::memory_resource {
 };
 #endif
 
+#ifndef GC_MAX_NUM_BLOCKS
 #define GC_MAX_NUM_BLOCKS 32ul
+#endif
+#ifndef GC_MAX_POOL_BLOCK_SIZE
 #define GC_MAX_POOL_BLOCK_SIZE 2048ul
+#endif
 
 // FIXME: rename this to pool
 struct gc {
@@ -617,6 +636,7 @@ struct gc {
       : pool(options(), std::pmr::new_delete_resource())
 #endif
   {
+    (void)id;
   }
 
   inline std::pmr::polymorphic_allocator<std::byte> get_allocator() {
@@ -628,7 +648,7 @@ struct gc {
     return std::pmr::polymorphic_allocator<T>(&pool);
   }
 
-  inline std::pmr::unsynchronized_pool_resource *get_pool() { return &pool; }
+  inline std::pmr::synchronized_pool_resource *get_pool() { return &pool; }
 
 private:
   static std::pmr::pool_options
@@ -643,8 +663,18 @@ private:
 #ifdef GC_ENABLE_MEMORY_TRACKING
   tracking_resource tracker;
 #endif
-  std::pmr::unsynchronized_pool_resource pool;
+  std::pmr::synchronized_pool_resource pool;
 };
+
+template <typename T> inline T *allocate(std::size_t sz) {
+  return static_cast<T *>(memory::pool()->allocate(sz, alignof(T)));
+}
+template <typename T> inline void deallocate(T *ptr) {
+  if (ptr) {
+    std::pmr::polymorphic_allocator<T> alloc(pool());
+    alloc.deallocate(ptr, 1);
+  }
+}
 } // namespace memory
 
 namespace thread {

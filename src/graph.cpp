@@ -154,11 +154,13 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
     vertices[i].reserve(est_vertices);
   }
 
+  feed feed(in, T);
+#pragma unroll 32
   while (feed) {
-    pool.exec([&edges, &vertices,
-               chunk = feed.read_chunk()](std::uint16_t task_id) mutable {
-      auto &local_edges = edges[task_id];
-      auto &local_vertices = vertices[task_id];
+    auto chunk = feed.fetch_chunk();
+    pool.exec([&edges, &vertices, chunk](std::uint16_t tid) mutable {
+      auto &local_edges = edges[tid];
+      auto &local_vertices = vertices[tid];
       auto it = chunk.begin;
       auto end = chunk.end;
       while (it != end) {
@@ -180,7 +182,6 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
   }
   pool.join();
   stamp_end = std::chrono::high_resolution_clock::now();
-
   logger::info("Reading", logger::throughput(stamp, stamp_end, E));
 
   stamp = std::chrono::high_resolution_clock::now();
