@@ -27,6 +27,7 @@
 // #define NDEBUG
 
 #include "cache.hpp"
+#include "colour.hpp"
 #include "graph.hpp"
 
 namespace mc {
@@ -68,59 +69,30 @@ private:
   //
   // after branch termination, if the current thread had found the largest one
   // so far amongst all the running threads (even if they are still running
-  std::pmr::vector<graph::key> max_clique;
+  std::pmr::vector<key> max_clique;
   //
   // hence, we can set the max clique few times and avoid unnecessary
   //  assignments of cliques from several threads, at least in most cases
-  graph::key branching_key;
+  key branching_key;
 
   // terminate the algorithm early if the depth matches the bound
   std::atomic_bool upper_bound_reached = false;
 
   void solution(flavour algo, std::size_t upper_bound);
 
-  bool enlarge_clique_size(graph::key key, std::size_t &max_clique_size,
+  bool enlarge_clique_size(key key, std::size_t &max_clique_size,
                            std::size_t depth);
 
-  void branch_exact(
-      graph::key key, graph::key v,
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          &sorted_neighs,
-      std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
-      std::size_t upper_bound, std::size_t &num_nodes,
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          &cache,
-      std::size_t &cache_hits, std::size_t depth = 1);
+  void branch_exact(key root, key v, colouring_engine &engine,
+                    colour_sorted &sorted_neighs, std::pmr::vector<key> &clique,
+                    std::size_t &max_clique_size, std::size_t upper_bound,
+                    std::size_t &num_nodes, std::size_t depth = 1);
 
-  void branch_heuristic(
-      graph::key key, graph::key v,
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          &sorted_neighs,
-      std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
-      std::size_t upper_bound, std::size_t &num_nodes,
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          &cache,
-      std::size_t &cache_hits, std::size_t depth = 1);
-
-  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-  colour_sort(const std::pmr::vector<graph::key> &neighs,
-              lru_cache<std::pmr::vector<graph::key>,
-                        std::pmr::vector<graph::colour>> &cache,
-              std::size_t &cache_hits) const {
-    static thread_local size_t cache_hits_mod = 10'000;
-    auto precomputed = cache.get(neighs);
-    if (precomputed.has_value()) {
-      cache_hits++;
-      if (cache_hits % cache_hits_mod == 0) {
-        cache_hits_mod += .5 * cache_hits_mod;
-        logger::warn("current cache hits", cache_hits);
-      }
-      return precomputed.value();
-    } else {
-      auto [_, colours] = G.colour_sort(neighs);
-      return cache.set(neighs, std::move(colours));
-    }
-  }
+  void branch_heuristic(key root, key v, colouring_engine &engine,
+                        colour_sorted &sorted_neighs,
+                        std::pmr::vector<key> &clique,
+                        std::size_t &max_clique_size, std::size_t upper_bound,
+                        std::size_t &num_nodes, std::size_t depth = 1);
 
 public:
   static inline std::size_t no_upper_bound = -1u;

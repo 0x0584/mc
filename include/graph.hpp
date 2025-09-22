@@ -28,35 +28,7 @@ namespace mc {
 struct graph {
   friend struct graph_builder;
 
-  using vertex = std::uint32_t;
-  using key = std::uint32_t;
-  using offset = std::uint64_t;
-  using colour = std::uint32_t;
-
-  struct vertex_subset_index {
-    explicit vertex_subset_index(const std::pmr::vector<key> &vs)
-        : vs_sorted(vs) {
-      std::sort(vs_sorted.begin(), vs_sorted.end());
-      // vs_sorted.erase(std::unique(vs_sorted.begin(), vs_sorted.end()),
-      //                 vs_sorted.end());
-    }
-
-    bool contains(key u) const {
-      return std::binary_search(vs_sorted.cbegin(), vs_sorted.cend(), u);
-    }
-
-    std::size_t index(key u) const {
-      auto it = std::lower_bound(vs_sorted.cbegin(), vs_sorted.cend(), u);
-      return static_cast<std::size_t>(it - vs_sorted.cbegin());
-    }
-
-    const std::pmr::vector<key> &vertices() const { return vs_sorted; }
-
-    std::size_t size() const { return vs_sorted.size(); }
-
-  private:
-    std::pmr::vector<key> vs_sorted;
-  };
+  typedef uint32_t vertex;
 
   graph() = delete;
   graph(const graph &) = delete;
@@ -65,14 +37,15 @@ struct graph {
   ~graph() { logger::debug("~graph()"); }
 
   graph &operator=(graph &) = delete;
-  graph &operator=(graph &&) = default;
+  graph &operator=(graph &&) = delete;
 
   inline std::size_t vertex_count() const { return n_vertices; }
 
   inline std::size_t edge_count() const { return n_edges; }
 
-  inline offset degree(const key u) const {
-    return offsets[u + 1] - offsets[u];
+  // FIXME: benchmark storing them separately
+  inline degree degree(const key u) const {
+    return static_cast<mc::degree>(offsets[u + 1] - offsets[u]);
   }
 
   inline const vertex &to_vertex(key u) const { return key_to_vertex[u]; }
@@ -87,56 +60,62 @@ struct graph {
     return vertices;
   }
 
-  inline std::pair<std::pmr::vector<key>::const_iterator,
-                   std::pmr::vector<key>::const_iterator>
-  neighbours(key u) const {
+  inline std::pair<const key *, const key *> neighbours(key u) const {
     const offset first = offsets[u];
     const offset last = offsets[u + 1];
-    return {neighs.cbegin() + first, neighs.cbegin() + last};
+    return {neighs.data() + first, neighs.data() + last};
   }
 
   inline std::pmr::vector<key>
-  neighbours(key u, const std::pmr::vector<key> &keys) const {
+  neighbourhood(key u, const std::pmr::vector<key> &keys) const {
     std::pmr::vector<key> neighs(memory::pool());
     neighs.reserve(degree(u));
     auto [first, last] = neighbours(u);
-    for (const auto &u : keys) {
-      if (last != std::lower_bound(first, last, u)) {
-        neighs.emplace_back(u);
+    for (const auto &v : keys) {
+      if (std::binary_search(first, last, v)) {
+        neighs.emplace_back(v);
       }
     }
     return neighs;
   }
 
-  bool is_clique(const std::pmr::vector<key> &vs) const {
-    vertex_subset_index idx(vs);
-    auto const &S = idx.vertices();
-
-    std::size_t k = idx.size();
-    if (k < 2)
+  inline bool is_clique(const std::pmr::vector<key> &keys) const {
+    const size_t k = keys.size();
+    if (k <= 1)
       return true;
 
-    for (key u : S) {
-      if (degree(u) < k - 1)
-        return false;
+    std::atomic<bool> failed{false};
+    thread::pool pool(args::num_threads);
+
+    for (size_t i = 0; i < k; ++i) {
+      pool.exec([&, i](auto) {
+        if (failed.load(std::memory_order_acquire))
+          return;
+
+        const key u = keys[i];
+
+        if (degree(u) < k - 1) {
+          failed.store(true, std::memory_order_release);
+          return;
+        }
+
+        auto [first, last] = neighbours(u);
+
+        for (size_t j = i + 1; j < k; ++j) {
+          if (failed.load(std::memory_order_acquire))
+            return;
+
+          const key v = keys[j];
+          if (!std::binary_search(first, last, v)) {
+            failed.store(true, std::memory_order_release);
+            return;
+          }
+        }
+      });
     }
 
-    for (key u : S) {
-      std::size_t cnt = 0;
-      auto [b, e] = neighbours(u);
-      for (auto it = b; it != e; ++it) {
-        if (idx.contains(*it))
-          ++cnt;
-      }
-      if (cnt != k - 1)
-        return false;
-    }
-    return true;
-  }
-
-  std::pair<std::pmr::vector<key>, std::pmr::vector<colour>>
-  colour_sort(const std::pmr::vector<key> &neighs) const {
-    return {};
+    pool.join();
+    return !failed.load(std::memory_order_acquire);
   }
 
   void print() const;
@@ -148,17 +127,17 @@ private:
       : n_vertices(n_vertices), n_edges(n_edges), offsets(std::move(offsets)),
         neighs(std::move(neighs)), key_to_vertex(std::move(key_to_vertex)) {}
 
-  std::size_t n_vertices;
-  std::size_t n_edges;
-  std::pmr::vector<offset> offsets;
-  std::pmr::vector<key> neighs;
-  std::pmr::vector<vertex> key_to_vertex;
+  const std::size_t n_vertices;
+  const std::size_t n_edges;
+  const std::pmr::vector<offset> offsets;
+  const std::pmr::vector<key> neighs;
+  const std::pmr::vector<vertex> key_to_vertex;
 };
 
 struct graph_builder {
   using Vertex = graph::vertex;
-  using Key = graph::key;
-  using Off = graph::offset;
+  using Key = key;
+  using Off = offset;
   using Edge = std::pair<Vertex, Vertex>;
 
   graph_builder(graph_builder &&) = delete;
@@ -166,7 +145,7 @@ struct graph_builder {
 
   explicit graph_builder(input &in)
       : feed(in), T(args::num_threads), V(feed.num_vertices()),
-        E(feed.num_edges()), CHUNK((E + T - 1) / T), pool(T) {}
+        E(feed.num_edges()), pool(T) {}
 
   ~graph_builder() { logger::debug("~graph_builder()"); }
 
@@ -187,7 +166,6 @@ private:
   const std::size_t T;
   const std::size_t V;
   const std::size_t E;
-  const std::size_t CHUNK;
 
   thread::pool pool;
 };

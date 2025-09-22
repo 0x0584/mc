@@ -25,46 +25,93 @@
 
 #include "profiler.hpp"
 
+#include "colour.hpp"
 #include "graph.hpp"
 #include "mc.hpp"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
+static inline bool is_dev_null(int fd) {
+  struct stat fd_stat;
+  struct stat dev_null_stat;
+
+  // Get status of the file descriptor
+  if (fstat(fd, &fd_stat) == -1) {
+    perror("fstat");
+    return false;
+  }
+
+  // Get status of /dev/null
+  if (stat("/dev/null", &dev_null_stat) == -1) {
+    perror("stat");
+    return false;
+  }
+
+  // Compare device and inode numbers
+  return (fd_stat.st_dev == dev_null_stat.st_dev) &&
+         (fd_stat.st_ino == dev_null_stat.st_ino);
+}
+
+const bool no_stdout = is_dev_null(1);
+const bool no_stderr = is_dev_null(2);
+
 using namespace mc;
 
-auto gen_keys(auto size) {
-  std::pmr::vector<graph::key> keys(size);
-  std::iota(keys.begin(), keys.end(), 0);
-  logger::debug("V=", keys.size());
-  return keys;
-}
-
-void print(const char *s, auto &key_cols) {
+std::string colour_sorted_str(const colour_sorted &cs) {
   std::ostringstream oss;
-  oss << "using " << s << " " << key_cols.size() << " ";
-  for (auto [k, col] : key_cols) {
-    oss << k << "=" << col << " ";
-  }
-  logger::debug(oss.str());
-  logger::warn(s, key_cols.highest_colour());
-}
-
-/*
-  void is_valid_colouring(const char *str, auto &key_cols, const graph &g) {
-  std::pmr::unordered_map<graph::key, graph::colour> ktoc(
-      memory::pool());
-  ktoc.reserve(key_cols.size());
-
-  for (const auto &[u, u_col] : key_cols) {
-    ktoc.emplace(u, u_col);
-  }
-
-  for (const auto &[u, u_col] : ktoc) {
-    for (auto v : e.neighbours(u, {})) {
-      enumerator::colour v_col = ktoc[v];
-      assert(u_col != v_col, str, u_col, "should not be", v_col);
+  oss << "(";
+  if (!cs.empty()) {
+    for (auto i = 0ul; i < cs.size(); ++i) {
+      oss << " " << cs.key_at(i) << "=" << cs.colour_at(i);
     }
   }
+  oss << " )";
+  return oss.str();
+}
+
+std::string vector_str(const std::pmr::vector<key> &v) {
+  std::ostringstream oss;
+  oss << "(";
+  for (auto &u : v) {
+    oss << " " << u;
   }
-*/
+  oss << " )";
+  return oss.str();
+}
+
+std::pmr::vector<key> neighbours(const graph &g, key u) {
+  auto [first, last] = g.neighbours(u);
+  std::pmr::vector<key> v{first, last};
+  // logger::print(u, "orig neighbours", vector_str(v));
+  return v;
+}
+
+void simulate_branching(const graph &g, colouring_engine &engine, key u,
+                        colour_sorted &parent, std::size_t depth) {
+  std::string depth_str(depth, ' ');
+
+  for (int i = 1; !parent.empty(); ++i) {
+    logger::info(depth_str, "depth=", depth, "parent=", u,
+                 "chromatic=", parent.chromatic_num(),
+                 "coloured=", colour_sorted_str(parent));
+
+    auto [v, c] = parent.peel();
+    auto R = g.neighbourhood(v, parent.get_keys());
+
+    auto R_str = vector_str(R);
+
+    colour_sorted child = engine.colour_sort(std::move(R));
+
+    logger::debug(depth_str, "i=", i, u, "is parent (peeled=", v,
+                  "chromatic=", c, ") child=", v, "neighbourhood=", R_str,
+                  "child=", colour_sorted_str(child));
+
+    simulate_branching(g, engine, v, child, depth + 1);
+  }
+
+  logger::info(depth_str, "done depth=", depth, "parent=", u);
+}
 
 int main(int argc, char *argv[]) {
   std::set_terminate([] {
@@ -86,16 +133,53 @@ int main(int argc, char *argv[]) {
   graph_builder builder(in);
   graph g = builder.build(args::undirected);
 
-  auto start = std::chrono::system_clock::now();
+  // key u = 20;
 
-  profiler_start("colour.prof");
-  auto cols = g.colour_sort(gen_keys(g.vertex_count()));
-  profiler_stop();
+  // auto u_neighs = neighbours(g, u);
+  // std::sort(u_neighs.begin(), u_neighs.end());
+  // logger::print(u, "neighbours", vector_str(u_neighs));
 
-  auto end = std::chrono::system_clock::now();
-  logger::warn("dsatur done in", logger::time_diff(start, end));
+  // colouring_engine engine(g);
+
+  // auto cs = engine.colour_sort(std::move(u_neighs));
+
+  // do {
+  //   u_neighs = cs.get_keys();
+  //   cs = engine.colour_sort(std::move(u_neighs));
+  //   logger::print(u, "colours", colour_sorted_str(cs));
+  //   cs.peel();
+  // } while (!cs.empty());
+
+  // return 42;
+
+  /*
+  key u = 20;
+  colouring_engine engine(g);
+  colour_sorted u_coloured = engine.colour_sort_first(neighbours(g, u));
+  is_valid_colouring(g, u_coloured);
+
+  logger::info("ROOT parent=", u, " coloured=", colour_sorted_str(u_coloured));
+  simulate_branching(g, engine, u, u_coloured, 1);
 
   return 42;
+*/
+  // auto keys = gen_keys(g.vertex_count());
+
+  // auto t0 = std::chrono::high_resolution_clock::now();
+  // colour_sorted coloured_g = colouring_engine::colour_sort_graph(g);
+  // auto t1 = std::chrono::high_resolution_clock::now();
+  // logger::warn("colouring_took", logger::duration(t0, t1));
+  // if (!no_stdout) {
+  //   std::ostringstream oss;
+  //   oss << "chromatic number: " << coloured_g.chromatic_num() << "\n";
+  //   for (auto i = 0ul; i < coloured_g.size(); ++i) {
+  //     oss << g.to_vertex(coloured_g.key_at(i));
+  //     oss << "(" << coloured_g.colour_at(i) << ") ";
+  //   }
+  //   logger::print(oss.str());
+  // }
+  // is_valid_colouring(g, coloured_g);
+  // return 42;
 
   multithreaded algo(g);
   for (long turn = 1; turn <= args::num_turns; ++turn) {

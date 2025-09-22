@@ -46,6 +46,7 @@
 #define BG_WHITE "\x1b[47m"
 #define BG_DEFAULT_BG "\x1b[49m"
 
+#include "types.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -619,5 +620,31 @@ private:
 // #endif
 
 // FIXME: turn logger into a class
+
+template <typename T> static inline constexpr T next_pow2(T n) {
+  if constexpr (std::is_signed_v<T>) {
+    if (n <= 0) [[unlikely]] {
+      return (n == 0) ? 1 : 0;
+    }
+  } else {
+    if (n == 0) [[unlikely]] {
+      return 1;
+    }
+  }
+  if (n > (static_cast<T>(1) << (sizeof(T) * 8 - 1))) [[unlikely]] {
+    return 0;
+  }
+  n--;
+
+#pragma unroll 32
+  for (unsigned i = 1; i < sizeof(T) * 8; i <<= 1) {
+    n |= n >> i;
+  }
+
+  return ++n;
+}
+
+#define STRINGIFY(x) #x
+#define PRAGMA_UNROLL(x) _Pragma(STRINGIFY(unroll x))
 
 #endif // CORE_HPP

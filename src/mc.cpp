@@ -74,7 +74,7 @@ std::pmr::vector<graph::vertex> multithreaded::solve(flavour algo,
   max_clique.clear();
   overall_size = 0;
   upper_bound_reached = false;
-  branching_key = graph::key();
+  branching_key = key();
 
   return clique;
 }
@@ -104,21 +104,7 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   // vertex keys are stored in a vector, so that then would be processed
   // in-parallel, and pruned later as the algorithm proceeds
-  std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>> keys;
-  {
-    std::pmr::vector<graph::key> tmp(memory::pool());
-    tmp.reserve(G.vertex_count());
-    for (auto u = 0ul; u < G.vertex_count(); ++u) {
-      tmp.emplace_back(u);
-    }
-    keys = G.colour_sort(std::move(tmp));
-
-    // std::ostringstream oss;
-    // for (auto u = 0ul; u < G.vertex_count(); ++u) {
-    //   oss << keys.first[u] << ":" << keys.second[u] << " ";
-    // }
-    // logger::warn(oss.str());
-  }
+  colour_sorted root = colouring_engine::colour_sort(G);
 
   // sort vertices based on their colours using greedy colouring
   // FIXME: re-introduce this inside the loop
@@ -140,21 +126,26 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
   //
   // since the algorithm is recursive, each callback is a branching
   std::atomic_size_t total_branches = 0;
-  std::atomic_size_t total_cache_hits = 0;
 
   thread::pool branches(args::num_threads);
+
+  std::pmr::vector<colouring_engine> engines(memory::pool());
+  engines.reserve(args::num_threads);
+  for (auto i = 0u; i < args::num_threads; ++i) {
+    engines.emplace_back(G);
+  }
 
   std::string prof_name = args::filename + ".prof";
 
   begin = std::chrono::high_resolution_clock::now();
   profiler_start(prof_name.c_str());
-  auto i = keys.first.size();
-  while (!abort_search && !upper_bound_reached && i-- != 0) {
-    branches.exec([i, &abort_search, &algo, &branches, &old_max_clique_size,
-                   &upper_bound, &total_branches, &total_cache_hits, &keys,
-                   this](std::uint16_t) mutable {
-      make_scope_timer(branch_timer);
+  std::size_t i = root.size();
+  while (!abort_search && !upper_bound_reached && i != 0) {
+    i--;
+    branches.exec([&, i](std::uint16_t tid) mutable {
+      // make_scope_timer(branch_timer);
       if (abort_search || upper_bound_reached) {
+        branches.discard_pending();
         return;
       }
 
@@ -170,49 +161,61 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
                       "vertices was found!");
       }
 
-      const auto &key = keys.first[i];
-      const auto &colour = keys.second[i];
+      auto [k, c] = root.at(i);
 
-      auto v = G.to_vertex(key);
+      auto v = G.to_vertex(k);
 
-      if (colour <= max_clique_size) {
+      if (c <= max_clique_size) {
         abort_search = true;
         branches.discard_pending();
         logger::debug(v, "has no sufficient colours. abort search.");
         return;
       }
 
-      std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          sorted_neighs;
-      {
-        // make_scope_timer(sorted_neighs_timer);
-        auto [first, last] = G.neighbours(key);
-        std::pmr::vector<graph::key> neighs(first, last, memory::pool());
-        if ((i + 1) < keys.first.size()) [[likely]] {
-          std::pmr::vector<std::size_t> remove_neigh(memory::pool());
-          remove_neigh.reserve(keys.first.size() - i);
-          // XXX: use iterator instead to avoid blocking threads
-          for (auto j = keys.first.size() - 1; j > i; --j) {
-            auto it = std::lower_bound(first, last, keys.first[j]);
-            if (it != last) [[likely]] {
-              remove_neigh.emplace_back(static_cast<std::size_t>(it - first));
-            }
-          }
-          if (!remove_neigh.empty()) [[likely]] {
-            std::sort(remove_neigh.begin(), remove_neigh.end());
-            while (!remove_neigh.empty()) {
-              std::size_t idx = remove_neigh.back();
-              remove_neigh.pop_back();
-              std::swap(neighs[idx], neighs.back());
-              neighs.pop_back();
-            }
-            if (neighs.empty()) [[unlikely]] {
-              logger::debug(v, "has no neighbours. abandon branching.");
-              return;
-            }
-          }
+      // make_scope_timer(sorted_neighs_timer);
+      // XXX: use iterator instead to avoid blocking threads
+
+      auto [first, last] = G.neighbours(k);
+      std::pmr::vector<key> neighs(memory::pool());
+      neighs.reserve(G.degree(k));
+
+      std::pmr::vector<key> root_exclude(
+          (root.get_keys().begin() + static_cast<int>(i)),
+          root.get_keys().end(), memory::pool());
+
+      std::sort(root_exclude.begin(), root_exclude.end());
+
+      auto exclude_first = root_exclude.data();
+      auto exclude_last = exclude_first + root_exclude.size();
+
+      while (first != last && exclude_first != exclude_last) {
+        if (*first < *exclude_first) {
+          neighs.emplace_back(*first++);
+        } else if (*exclude_first < *first) {
+          exclude_first++;
+        } else {
+          ++first;
+          ++exclude_first;
         }
-        sorted_neighs = G.colour_sort(std::move(neighs));
+      }
+
+      std::copy(first, last, std::back_inserter(neighs));
+
+      if (neighs.empty()) [[unlikely]] {
+        abort_search = true;
+        branches.discard_pending();
+        logger::debug(v, "has no neighbours. abandon branching.");
+        return;
+      }
+
+      colouring_engine &engine = engines[tid];
+      colour_sorted sorted_neighs = engine.colour_sort(std::move(neighs));
+
+      if (sorted_neighs.empty()) [[unlikely]] {
+        abort_search = true;
+        branches.discard_pending();
+        logger::debug(v, "has no neighbours. abandon branching.");
+        return;
       }
 
       // std::ostringstream oss;
@@ -223,44 +226,40 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
       // }
       // logger::warn(oss.str());
 
-      auto highest_colour = sorted_neighs.second.back();
-      if (highest_colour < max_clique_size) {
+      auto highest_colour = sorted_neighs.chromatic_num();
+      if (highest_colour <= max_clique_size) {
         abort_search = true;
         branches.discard_pending();
         logger::debug("Vertex", v, "has insufficient colours. abort search.");
         return;
       }
 
-      logger::debug("Branching on vertex", v, "with",
-                    sorted_neighs.first.size(), "neighbours of", highest_colour,
-                    "colours");
+      logger::warn("Branching on vertex", v, "with", sorted_neighs.size(),
+                   "neighbours of", highest_colour, "colours");
 
       auto begin = std::chrono::high_resolution_clock::now();
 
       std::size_t num_nodes = 0;
-      std::pmr::vector<graph::key> clique(memory::pool());
-      lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-          cache(100'000);
-      std::size_t cache_hits = 0;
+      std::pmr::vector<key> clique(memory::pool());
 
       // TODO: change this to be iterative instead of recusive
       if (algo == flavour::heuristic) {
-        branch_heuristic(key, key, sorted_neighs, clique, max_clique_size,
-                         upper_bound, num_nodes, cache, cache_hits);
+        branch_heuristic(k, k, engine, sorted_neighs, clique, max_clique_size,
+                         upper_bound, num_nodes);
       } else {
-        branch_exact(key, key, sorted_neighs, clique, max_clique_size,
-                     upper_bound, num_nodes, cache, cache_hits);
+        branch_exact(k, k, engine, sorted_neighs, clique, max_clique_size,
+                     upper_bound, num_nodes);
       }
 
       // XXX: use key instead of thread_id to check for branching clique
       if (std::scoped_lock clique_lock(mtx);
-          clique.size() > max_clique.size() && key == branching_key) {
+          clique.size() > max_clique.size() && k == branching_key) {
 
         if constexpr (logger::current_level == logger::log_level::debug) {
           std::ostringstream oss;
           oss << "Found clique for " << v << " of " << clique.size()
               << " vertices { ";
-          for (graph::key u : clique) {
+          for (key u : clique) {
             oss << G.to_vertex(u) << " ";
           }
           oss << "}";
@@ -271,13 +270,12 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
         max_clique = std::move(clique);
       }
 
+      std::vector<int> vff(1);
       total_branches += num_nodes;
-      total_cache_hits += cache_hits;
 
       auto end = std::chrono::high_resolution_clock::now();
-      logger::debug("Done with vertex", v, "after", num_nodes, "branches took",
-                    logger::time_diff(begin, end, logger::bold), "with",
-                    cache_hits, "cache hits");
+      logger::warn("Done with vertex", v, "after", num_nodes, "branches took",
+                   logger::duration(begin, end));
     });
   }
 
@@ -286,17 +284,12 @@ void multithreaded::solution(flavour algo, std::size_t upper_bound) {
 
   auto end = std::chrono::high_resolution_clock::now();
 
-  double cache_hits_percent = (double(total_cache_hits) / total_branches);
-  cache_hits_percent = std::round(cache_hits_percent * 1000) / 1000;
-  logger::info(
-      algo, "finished! found", overall_size, "vertices after",
-      total_branches.load(), "branches and", total_cache_hits.load(),
-      "cache hits with ratio of", cache_hits_percent, "in",
-      logger::time_diff(begin, end, logger::ansi_colours | logger::bold));
+  logger::info(algo, "finished! found", overall_size, "vertices after",
+               total_branches.load(), "branches in",
+               logger::duration(begin, end));
 }
 
-bool multithreaded::enlarge_clique_size(graph::key key,
-                                        std::size_t &max_clique_size,
+bool multithreaded::enlarge_clique_size(key key, std::size_t &max_clique_size,
                                         std::size_t depth) {
   bool found = false;
   {
@@ -327,15 +320,12 @@ bool multithreaded::enlarge_clique_size(graph::key key,
   return found;
 }
 
-void multithreaded::branch_exact(
-    graph::key key, graph::key v,
-    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-        &sorted_neighs,
-    std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
-    std::size_t upper_bound, std::size_t &num_nodes,
-    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-        &cache,
-    std::size_t &cache_hits, std::size_t depth) {
+void multithreaded::branch_exact(key root, key v, colouring_engine &engine,
+                                 colour_sorted &parent,
+                                 std::pmr::vector<key> &clique,
+                                 std::size_t &max_clique_size,
+                                 std::size_t upper_bound,
+                                 std::size_t &num_nodes, std::size_t depth) {
   num_nodes++;
 
   {
@@ -345,10 +335,9 @@ void multithreaded::branch_exact(
     max_clique_size = overall_size;
   }
 
-  auto &[keys, colours] = sorted_neighs;
   const std::size_t next_depth = depth + 1;
   //  const std::size_t neighs_before = sorted_neighs.size();
-  while (!keys.empty() && !upper_bound_reached) {
+  while (!parent.empty() && !upper_bound_reached) {
     // since the vertices were coloured "optimally", we can use them to
     // terminate a branch early when we deduce it will not lead into max
     // clique.  since the depth represents how many vertices had been
@@ -360,21 +349,19 @@ void multithreaded::branch_exact(
     // we are less than the global size
     //
     // vertices we sorted in increasing degeneracy so taking the highest colour
-    graph::key u = keys.back();
-    keys.pop_back();
-    graph::colour colour = colours.back();
-    colours.back();
-    if (depth + colour <= max_clique_size) {
+    auto [u, c] = parent.peel();
+    if (depth + c <= max_clique_size) {
       break;
     }
 
-    // logger::info("branching", key, "current", u, "with colour", colour,
-    //              "current clique", max_clique_size);
+    // logger::debug("branching", root, "current", u, "with colour", c,
+    //               "current clique", max_clique_size);
     const std::size_t prev_max_clique_size = max_clique_size;
 
-    auto new_neighs = G.neighbours(u, keys);
-    if (new_neighs.empty() || next_depth == upper_bound) {
-      if (enlarge_clique_size(key, max_clique_size, next_depth)) {
+    auto child_keys = G.neighbourhood(u, parent.get_keys());
+
+    if (child_keys.empty() || next_depth == upper_bound) {
+      if (enlarge_clique_size(root, max_clique_size, next_depth)) {
         if (next_depth == upper_bound) {
           upper_bound_reached = true; // prevent additional recursions
         }
@@ -383,14 +370,15 @@ void multithreaded::branch_exact(
         clique.emplace_back(u);
       }
     } else {
-      auto new_sorted_neighs =
-          colour_sort(std::move(new_neighs), cache, cache_hits);
-      auto &[_, new_colours] = new_sorted_neighs;
-      if (next_depth + new_colours.back() > max_clique_size) {
-        branch_exact(key, u, new_sorted_neighs, clique, max_clique_size,
-                     upper_bound, num_nodes, cache, cache_hits, next_depth);
+      auto child = engine.colour_sort_no_order(std::move(child_keys));
+      if (!child.empty() &&
+          (next_depth + child.chromatic_num()) > max_clique_size) {
+        branch_exact(root, u, engine, child, clique, max_clique_size,
+                     upper_bound, num_nodes, next_depth);
       }
     }
+
+    // engine.recolour_parent(parent, c);
 
     // when we reach a leaf, when recursion terminates, we had already saved the
     // old size so we can determine if a clique had been found for the current
@@ -402,27 +390,18 @@ void multithreaded::branch_exact(
         // is guaranteed to have the correct value: which is exactly what we are
         // trying to achieve.  practically (as far as I had measured) locking
         // the mutex would x2 the runtime with not clear benefit
-        branching_key == key) {
+        branching_key == root) {
       clique.emplace_back(v);
     }
   }
 
-  // logger::print_thread(thread_id, "branching off", E.key_to_vertex(v),
-  // "with",
-  //                   neighs_before - neighs.size(),
-  //                   "remaining neighbours with max_colour", colours.back(),
-  //                   "colours and depth", depth);
+  // logger::debug("branching off", v, "at depth", depth);
 }
 
 void multithreaded::branch_heuristic(
-    graph::key key, graph::key v,
-    std::pair<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-        &sorted_neighs,
-    std::pmr::vector<graph::key> &clique, std::size_t &max_clique_size,
-    std::size_t upper_bound, std::size_t &num_nodes,
-    lru_cache<std::pmr::vector<graph::key>, std::pmr::vector<graph::colour>>
-        &cache,
-    std::size_t &cache_hits, std::size_t depth) {
+    key root, key v, colouring_engine &engine, colour_sorted &parent,
+    std::pmr::vector<key> &clique, std::size_t &max_clique_size,
+    std::size_t upper_bound, std::size_t &num_nodes, std::size_t depth) {
   if (upper_bound_reached) {
     return;
   }
@@ -440,12 +419,15 @@ void multithreaded::branch_heuristic(
   // the essence of the heuristic is instead of traversing all neighbours, we
   // only pick the most promising one: the vertex with the highest colour
 
-  auto &[keys, colours] = sorted_neighs;
-  graph::key u = keys.back();
+  auto [u, c] = parent.peel();
+  auto child_keys = G.neighbourhood(u, parent.get_keys());
 
-  auto new_neighs = G.neighbours(u, std::move(keys));
-  if (new_neighs.empty() || next_depth == upper_bound) {
-    if (enlarge_clique_size(key, max_clique_size, next_depth)) {
+  // logger::debug("branching", root, "current", u, "with colour", c,
+  //               "current clique", max_clique_size, "child_size",
+  //               child_keys.size(), "parent_size", parent.size());
+
+  if (child_keys.empty() || next_depth == upper_bound) {
+    if (enlarge_clique_size(root, max_clique_size, next_depth)) {
       if (next_depth == upper_bound) {
         upper_bound_reached = true;
       }
@@ -454,16 +436,21 @@ void multithreaded::branch_heuristic(
       clique.emplace_back(u);
     }
   } else {
-    auto new_sorted_neighs =
-        colour_sort(std::move(new_neighs), cache, cache_hits);
-    auto &[_, new_colours] = new_sorted_neighs;
-    if (next_depth + new_colours.back() > max_clique_size) {
-      branch_heuristic(key, u, new_sorted_neighs, clique, max_clique_size,
-                       upper_bound, num_nodes, cache, cache_hits, next_depth);
+    // auto child_keys_sz = child_keys.size();
+    auto child = engine.colour_sort(std::move(child_keys));
+    // Assert(child.size() == child_keys_sz, "differenece in size!",
+    // child.size(),
+    //        child_keys_sz);
+    if (!child.empty() &&
+        (next_depth + child.chromatic_num()) > max_clique_size) {
+      branch_heuristic(root, u, engine, child, clique, max_clique_size,
+                       upper_bound, num_nodes, next_depth);
     }
   }
 
-  if (prev_max_clique_size < max_clique_size && branching_key == key) {
+  // logger::debug("branching", v, "at depth", depth);
+
+  if (prev_max_clique_size < max_clique_size && branching_key == root) {
     clique.emplace_back(v);
   }
 }

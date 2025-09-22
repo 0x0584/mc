@@ -3,6 +3,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   input.cpp
   flavour.cpp
   graph.cpp
+  colour.cpp
   mc.cpp
   main.cpp
 )

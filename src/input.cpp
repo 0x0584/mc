@@ -87,7 +87,7 @@ static inline char const *last_delimiter(char const *__restrict base,
 #define PRAGMA_UNROLL(x) _Pragma(STRINGIFY(unroll x))
 #define BLOCK_SCAN(BLOCK_SIZE)                                                 \
   do {                                                                         \
-    if ((tail - base) >= BLOCK_SIZE) {                                         \
+    while ((tail - base) >= BLOCK_SIZE) {                                      \
       tail -= BLOCK_SIZE;                                                      \
       PRAGMA_UNROLL(BLOCK_SIZE)                                                \
       for (int i = BLOCK_SIZE - 1; i >= 0; --i) {                              \

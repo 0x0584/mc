@@ -24,6 +24,15 @@
 #include <execution>
 #include <numeric>
 
+// FIXME: update this to return a pair
+static inline std::pair<std::size_t, std::size_t>
+chunk_range(std::size_t size, std::size_t threads, std::size_t idx) {
+  const std::size_t chunk = (size + threads - 1) / threads;
+  const std::size_t start = idx * chunk;
+  const std::size_t end = std::min(start + chunk, size);
+  return {start, end};
+}
+
 namespace mc {
 void graph::print() const {
   std::ostringstream oss;
@@ -258,8 +267,7 @@ void graph_builder::parse_graph(
       T, std::pmr::vector<Off>(V, memory::pool()), memory::pool());
 
   for (std::size_t tid = 0; tid < T; ++tid) {
-    std::size_t start = tid * CHUNK;
-    std::size_t end = std::min(start + CHUNK, E);
+    auto [start, end] = chunk_range(E, T, tid);
     pool.exec([tid, start, end, &edges_raw, &vertices_raw, &edges_key,
                &local_degrees](std::uint16_t) {
       auto &degrees = local_degrees[tid];
@@ -283,8 +291,7 @@ void graph_builder::parse_graph(
   pool.join();
 
   for (std::size_t tid = 0; tid < T; ++tid) {
-    std::size_t start = tid * CHUNK;
-    std::size_t end = std::min(start + CHUNK, V);
+    auto [start, end] = chunk_range(V, T, tid);
     pool.exec(
         [start, end, pool_size = T, &local_degrees, &degrees](std::uint16_t) {
           for (std::size_t t = 0; t < pool_size; ++t) {
@@ -328,9 +335,8 @@ graph graph_builder::build(bool) {
 
   std::pmr::vector<Key> neighs(offsets[V], memory::pool());
 
-  for (std::size_t t = 0; t < T; ++t) {
-    std::size_t start = t * CHUNK;
-    std::size_t end = std::min(start + CHUNK, E);
+  for (std::size_t tid = 0; tid < T; ++tid) {
+    auto [start, end] = chunk_range(E, T, tid);
     pool.exec([&, start, end](std::uint16_t) {
       for (std::size_t i = start; i < end; ++i) {
         auto [u, v] = edges_key[i];
@@ -338,6 +344,18 @@ graph graph_builder::build(bool) {
         Off iv = cursor[v].fetch_add(1, std::memory_order_relaxed);
         neighs[iu] = v;
         neighs[iv] = u;
+      }
+    });
+  }
+  pool.join();
+
+  for (std::size_t tid = 0; tid < T; ++tid) {
+    auto [start, end] = chunk_range(V, T, tid);
+    pool.exec([&, start, end](std::uint16_t) {
+      for (std::size_t i = start; i < end; ++i) {
+        auto first = neighs.data() + offsets[i];
+        auto last = neighs.data() + offsets[i + 1];
+        std::sort(first, last);
       }
     });
   }
