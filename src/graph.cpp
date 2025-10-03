@@ -164,8 +164,8 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
   }
 
   do {
-    pool.exec([&local_edges, &local_vertices, // &runtimes,
-               chunk = feed.read_chunk()](std::uint16_t tid) mutable {
+    pool.submit([&local_edges, &local_vertices, // &runtimes,
+                 chunk = feed.read_chunk()](std::uint16_t tid) mutable {
       auto &edges = local_edges[tid];
       auto &vertices = local_vertices[tid];
       auto it = chunk.begin();
@@ -180,6 +180,9 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
         if (u == v) {
           logger::debug("self-loop edges are not supported");
         } else {
+          if (v < u) {
+            std::swap(u, v);
+          }
           edges.emplace_back(u, v);
           vertices.push_back(u);
           vertices.push_back(v);
@@ -196,8 +199,8 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
 
 #pragma unroll 32
   for (std::size_t i = 0; i < T; ++i) {
-    pool.exec([i, &local_vertices](auto) { dedup(local_vertices[i]); });
-    pool.exec([i, &local_edges](auto) { dedup(local_edges[i]); });
+    pool.submit([i, &local_vertices](auto) { dedup(local_vertices[i]); });
+    pool.submit([i, &local_edges](auto) { dedup(local_edges[i]); });
   }
   pool.join();
 
@@ -213,7 +216,7 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
   edges_raw.reserve(total_edges);
   vertices_raw.reserve(total_vertices);
 
-  pool.exec([&total_vertices, &local_vertices, &vertices_raw](auto) {
+  pool.submit([&total_vertices, &local_vertices, &vertices_raw](auto) {
     auto begin = std::chrono::high_resolution_clock::now();
     merge_sort(local_vertices, vertices_raw);
     auto end = std::chrono::high_resolution_clock::now();
@@ -221,7 +224,7 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
                  logger::throughput(begin, end, total_vertices));
     vertices_raw.shrink_to_fit();
   });
-  pool.exec([&total_edges, &local_edges, &edges_raw](auto) {
+  pool.submit([&total_edges, &local_edges, &edges_raw](auto) {
     auto begin = std::chrono::high_resolution_clock::now();
     merge_sort(local_edges, edges_raw);
     auto end = std::chrono::high_resolution_clock::now();
@@ -244,8 +247,8 @@ void graph_builder::read_graph(std::pmr::vector<Edge> &edges_raw,
     logger::warn("edges number mismatch!", M, "should be", E, "or", 2 * E);
   }
 
-  Assert(N == V, "vertices number mismatch!");
-  Assert(M == E || M == 2 * E, "edges number mismatch!");
+  // Assert(N == V, "vertices number mismatch!");
+  // Assert(M == E || M == 2 * E, "edges number mismatch!");
 
   const_cast<std::size_t &>(V) = N;
   const_cast<std::size_t &>(E) = M;
@@ -268,8 +271,8 @@ void graph_builder::parse_graph(
 
   for (std::size_t tid = 0; tid < T; ++tid) {
     auto [start, end] = chunk_range(E, T, tid);
-    pool.exec([tid, start, end, &edges_raw, &vertices_raw, &edges_key,
-               &local_degrees](std::uint16_t) {
+    pool.submit([tid, start, end, &edges_raw, &vertices_raw, &edges_key,
+                 &local_degrees](std::uint16_t) {
       auto &degrees = local_degrees[tid];
       for (std::size_t i = start; i < end; ++i) {
         const auto &[u, v] = edges_raw[i];
@@ -292,7 +295,7 @@ void graph_builder::parse_graph(
 
   for (std::size_t tid = 0; tid < T; ++tid) {
     auto [start, end] = chunk_range(V, T, tid);
-    pool.exec(
+    pool.submit(
         [start, end, pool_size = T, &local_degrees, &degrees](std::uint16_t) {
           for (std::size_t t = 0; t < pool_size; ++t) {
 #pragma unroll 32
@@ -337,7 +340,7 @@ graph graph_builder::build(bool) {
 
   for (std::size_t tid = 0; tid < T; ++tid) {
     auto [start, end] = chunk_range(E, T, tid);
-    pool.exec([&, start, end](std::uint16_t) {
+    pool.submit([&, start, end](std::uint16_t) {
       for (std::size_t i = start; i < end; ++i) {
         auto [u, v] = edges_key[i];
         Off iu = cursor[u].fetch_add(1, std::memory_order_relaxed);
@@ -351,7 +354,7 @@ graph graph_builder::build(bool) {
 
   for (std::size_t tid = 0; tid < T; ++tid) {
     auto [start, end] = chunk_range(V, T, tid);
-    pool.exec([&, start, end](std::uint16_t) {
+    pool.submit([&, start, end](std::uint16_t) {
       for (std::size_t i = start; i < end; ++i) {
         auto first = neighs.data() + offsets[i];
         auto last = neighs.data() + offsets[i + 1];

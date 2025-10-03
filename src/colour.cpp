@@ -5,15 +5,13 @@ namespace mc {
 colouring_workspace::colouring_workspace(const graph &G)
     : G(G), V(G.vertex_count()), colours(V, memory::pool()),
       degrees(V, memory::pool()), epoch_mark(V, memory::pool()),
-      bucket_pos(V, memory::pool()), out_keys(memory::pool()),
-      out_colours(memory::pool()), colour_mask(memory::pool()),
-      touched(memory::pool()), order(memory::pool()) {}
+      bucket_pos(V, memory::pool()), bucket_head(V, key_npos, memory::pool()),
+      next(V, key_npos, memory::pool()), prev(V, key_npos, memory::pool()),
+      out_keys(memory::pool()), out_colours(memory::pool()),
+      colour_mask(memory::pool()), touched(memory::pool()),
+      order(memory::pool()) {}
 
 void colouring_workspace::order_smallest_last(std::pmr::vector<key> &R) {
-  using bucket = std::pmr::vector<key>;
-  std::pmr::vector<bucket> buckets(R.size(), bucket(memory::pool()),
-                                   memory::pool());
-
   degree min_degree = R.size();
 
   for (key v : R) {
@@ -25,9 +23,16 @@ void colouring_workspace::order_smallest_last(std::pmr::vector<key> &R) {
     for (auto [u, last] = G.neighbours(v); u != last; ++u) {
       d += (epoch_mark[*u] == epoch);
     }
+
     degrees[v] = d;
-    bucket_pos[v] = buckets[d].size();
-    buckets[d].emplace_back(v);
+    bucket_pos[v] = d;
+
+    next[v] = bucket_head[d];
+    if (bucket_head[d] != key_npos) {
+      prev[bucket_head[d]] = v;
+    }
+    bucket_head[d] = v;
+
     if (d < min_degree) {
       min_degree = d;
     }
@@ -36,40 +41,46 @@ void colouring_workspace::order_smallest_last(std::pmr::vector<key> &R) {
   std::size_t order_idx = 0;
 
   for (std::size_t k = 0; k < R.size(); ++k) {
-    while (buckets[min_degree].empty()) {
-      min_degree++;
+    while (min_degree <= R.size() && bucket_head[min_degree] == key_npos) {
+      ++min_degree;
     }
 
-    key v = buckets[min_degree].back();
-    buckets[min_degree].pop_back();
+    key v = bucket_head[min_degree];
+    bucket_head[min_degree] = next[v];
+    if (next[v] != key_npos) {
+      prev[next[v]] = key_npos;
+    }
 
     R[order_idx++] = v;
-
     epoch_mark[v] = 0;
 
-    for (auto [first, last] = G.neighbours(v); first != last; ++first) {
-      key u = *first;
-
-      if (epoch_mark[u] != epoch) {
+    for (auto [u, last] = G.neighbours(v); u != last; ++u) {
+      if (epoch_mark[*u] != epoch) {
         continue;
       }
 
-      degree old_d = degrees[u];
+      degree old_d = degrees[*u];
       degree new_d = old_d - 1;
 
-      std::pmr::vector<key> &old_bucket = buckets[old_d];
-      key swap_v = old_bucket.back();
+      if (prev[*u] != key_npos) {
+        next[prev[*u]] = next[*u];
+      } else {
+        bucket_head[old_d] = next[*u];
+      }
 
-      old_bucket[bucket_pos[u]] = swap_v;
-      bucket_pos[swap_v] = bucket_pos[u];
-      old_bucket.pop_back();
+      if (next[*u] != key_npos) {
+        prev[next[*u]] = prev[*u];
+      }
 
-      std::pmr::vector<key> &new_bucket = buckets[new_d];
-      new_bucket.emplace_back(u);
+      next[*u] = bucket_head[new_d];
+      if (bucket_head[new_d] != key_npos) {
+        prev[bucket_head[new_d]] = *u;
+      }
+      prev[*u] = key_npos;
+      bucket_head[new_d] = *u;
 
-      degrees[u] = new_d;
-      bucket_pos[u] = new_bucket.size() - 1;
-
+      degrees[*u] = new_d;
+      bucket_pos[*u] = new_d;
       if (new_d < min_degree) {
         min_degree = new_d;
       }

@@ -181,7 +181,7 @@ int main(int argc, char *argv[]) {
   // is_valid_colouring(g, coloured_g);
   // return 42;
 
-  multithreaded algo(g);
+  clique_solver algo(g);
   for (long turn = 1; turn <= args::num_turns; ++turn) {
     if (args::num_turns != 1) {
       logger::info("Turn", turn, "/", args::num_turns);
@@ -200,7 +200,7 @@ int main(int argc, char *argv[]) {
     logger::print(oss.str());
 
     if (args::draw) {
-      algo.draw(clique);
+      // algo.draw(clique);
     }
   }
 

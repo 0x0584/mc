@@ -143,8 +143,8 @@ struct gc {
 
 private:
   static std::pmr::pool_options
-  options(std::size_t max_blocks_per_chunk = 2,
-          std::size_t largest_required_pool_block = 256) {
+  options(std::size_t max_blocks_per_chunk = 32,
+          std::size_t largest_required_pool_block = 2048) {
     std::pmr::pool_options opts;
     opts.max_blocks_per_chunk = max_blocks_per_chunk;
     opts.largest_required_pool_block = largest_required_pool_block;
@@ -538,11 +538,10 @@ struct pool {
 
   std::size_t size() const { return _pool.size(); }
 
-  void exec(Task &&task) {
+  void submit(Task &&task) {
     std::uint16_t task_id;
-    if (std::unique_lock<std::mutex> pool_lock(_pool_mtx); _available.empty()) {
-      _pending_tasks.emplace(std::move(task));
-      pool_lock.unlock();
+    if (std::scoped_lock pool_lock(_pool_mtx); _available.empty()) {
+      _pending_tasks.emplace(std::forward<Task>(task));
       if (not pool_is_full) { // FIXME: use timed condition value to wait
         logger::debug("pool is full!");
         pool_is_full = true;
@@ -570,10 +569,13 @@ struct pool {
     logger::debug("all threads joined.");
   }
 
-  [[nodiscard]] bool pool_full() const { return pool_is_full; }
+  [[nodiscard]] bool pool_full() {
+    std::scoped_lock pool_lock(_pool_mtx);
+    return pool_is_full;
+  }
 
   void discard_pending() {
-    std::unique_lock pool_lock(_pool_mtx);
+    std::scoped_lock pool_lock(_pool_mtx);
     _pending_tasks = std::queue<Task>();
   }
 
@@ -589,6 +591,7 @@ private:
       pool_lock.unlock();
       pending_task(task_id);
     }
+    std::scoped_lock pool_lock(_pool_mtx);
     _available.emplace(task_id);
   }
 

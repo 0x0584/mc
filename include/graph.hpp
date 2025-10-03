@@ -88,7 +88,7 @@ struct graph {
     thread::pool pool(args::num_threads);
 
     for (size_t i = 0; i < k; ++i) {
-      pool.exec([&, i](auto) {
+      pool.submit([&, i](auto) {
         if (failed.load(std::memory_order_acquire))
           return;
 
@@ -125,13 +125,103 @@ private:
         std::pmr::vector<offset> offsets, std::pmr::vector<key> neighs,
         std::pmr::vector<vertex> key_to_vertex)
       : n_vertices(n_vertices), n_edges(n_edges), offsets(std::move(offsets)),
-        neighs(std::move(neighs)), key_to_vertex(std::move(key_to_vertex)) {}
+        neighs(std::move(neighs)), key_to_vertex(std::move(key_to_vertex)) {
+    verify_invariants();
+  }
 
   const std::size_t n_vertices;
   const std::size_t n_edges;
   const std::pmr::vector<offset> offsets;
   const std::pmr::vector<key> neighs;
   const std::pmr::vector<vertex> key_to_vertex;
+
+  void verify_invariants() {
+#ifndef NDEBUG
+    const std::size_t V = vertex_count();
+    const std::size_t E = edge_count();
+
+    // The internal arrays are private, so we'll access them via public methods,
+    // or assume friendly access for this verification utility.
+    // Assuming internal access:
+    // const auto& offsets = offsets;
+    // const auto& neighs = neighs;
+
+    logger::info("Graph Verification: Starting comprehensive check...");
+
+    // --- 1. Size Invariants Check ---
+    // The total size of the adjacency list must equal the stated edge count.
+    Assert(offsets[V] == 2 * E,
+           "VERIFY: Total length of adjacency lists (offsets[V]=" +
+               std::to_string(offsets[V]) + ") != stated edge count (E=" +
+               std::to_string(2 * E) + "). CSC structure is broken.");
+
+    // --- 2. Iterative Adjacency List Check (Duplicates & Sorting) ---
+    std::size_t verified_edge_count = 0;
+
+    for (mc::key u = 0; u < V; ++u) {
+      // Retrieve the neighbors range using the public method
+      auto [first, last] = neighbours(u);
+      const auto list_size = std::distance(first, last);
+
+      // a. Degree/Offset Consistency
+      Assert(degree(u) == list_size,
+             "VERIFY: Degree method (" + std::to_string(degree(u)) +
+                 ") != Adjacency list size (" + std::to_string(list_size) +
+                 ") for vertex " + std::to_string(u));
+
+      // b. Self-Loop Check (Simple Graph Invariant)
+      if (list_size > 0) {
+        Assert(*first != u, "VERIFY: Self-loop found for vertex " +
+                                std::to_string(u) + " at start of list.");
+      }
+
+      // c. Sorted & Uniqueness Check (CRITICAL for the d=61 error)
+      mc::key prev_v = 0;
+      bool is_first = true;
+
+      for (auto it = first; it != last; ++it) {
+        const mc::key v = *it;
+
+        // i. Key Validity Check
+        Assert(v < V, "VERIFY: Invalid neighbor key v=" + std::to_string(v) +
+                          " found in u=" + std::to_string(u) + "'s list.");
+
+        // ii. Sorted Check (Check the sort function worked)
+        if (!is_first) {
+          Assert(prev_v <= v, "VERIFY: Adjacency list is NOT sorted for u=" +
+                                  std::to_string(u) +
+                                  ". prev=" + std::to_string(prev_v) +
+                                  ", curr=" + std::to_string(v));
+        }
+
+        // iii. Uniqueness Check (Detects the d=61/multi-edge source)
+        if (!is_first) {
+          // If this assertion fails, the graph builder failed to deduplicate.
+          Assert(
+              prev_v != v,
+              "VERIFY: Duplicate neighbor (multi-edge) v=" + std::to_string(v) +
+                  " found in u=" + std::to_string(u) +
+                  "'s list. This is the likely cause of the d > R_size error.");
+        }
+
+        prev_v = v;
+        is_first = false;
+      }
+
+      verified_edge_count += std::size_t(list_size);
+    }
+
+    // Final check for total edge count consistency.
+    Assert(verified_edge_count == 2 * E,
+           "VERIFY: Total verified edges (" +
+               std::to_string(verified_edge_count) +
+               ") does not match stated edge count (E=" + std::to_string(E) +
+               ").");
+
+    logger::info("Graph Verification: All checks passed. Graph structure is "
+                 "confirmed valid.");
+#endif
+  }
 };
 
 struct graph_builder {

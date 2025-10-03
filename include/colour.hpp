@@ -81,7 +81,11 @@ class colouring_workspace {
   std::pmr::vector<colour> colours;
   std::pmr::vector<degree> degrees;
   std::pmr::vector<timestamp> epoch_mark;
+
   std::pmr::vector<key> bucket_pos;
+  std::pmr::vector<key> bucket_head;
+  std::pmr::vector<key> next;
+  std::pmr::vector<key> prev;
 
   std::pmr::vector<key> out_keys;
   std::pmr::vector<key> out_colours;
@@ -115,14 +119,14 @@ public:
   }
 
   inline void colour_sort(std::pmr::vector<key> &&R, colour_sorted &out,
-                          bool order) {
+                          bool order_keys) {
     if (R.empty()) [[unlikely]] {
       return;
     }
 
     start_epoch(R.size());
 
-    if (order) {
+    if (order_keys) {
       order_smallest_last(R);
     }
 
@@ -143,7 +147,7 @@ private:
       uint64_t inv = ~colour_mask[w];
       if (inv) {
         for (unsigned b = 0; b < 64; ++b) {
-          if (inv & (uint64_t(1) << b)) {
+          if (inv & (static_cast<uint64_t>(1) << b)) {
             colour candidate = b + (w << 6);
             if (candidate > 0) {
               return candidate;
@@ -170,8 +174,6 @@ private:
 class colouring_engine {
   colouring_workspace ws;
 
-  const std::size_t depth_threshold = 16;
-
 public:
   colouring_engine() = delete;
   colouring_engine(const colouring_engine &) = delete;
@@ -192,25 +194,25 @@ public:
     return out;
   }
 
-  inline colour_sorted colour_sort_order_policy(bool apply_order,
-                                                std::pmr::vector<key> &&R) {
+  inline colour_sorted colour_sort_order_policy(std::pmr::vector<key> &&R,
+                                                bool order_keys) {
     if (R.empty()) [[unlikely]] {
       return {};
     }
 
     colour_sorted out;
     out.reserve(R.size());
-    ws.colour_sort(std::move(R), out, apply_order);
+    ws.colour_sort(std::move(R), out, order_keys);
 
     return out;
   }
 
-  colour_sorted colour_sort(std::pmr::vector<key> &&R) {
-    return colour_sort_order_policy(true, std::move(R));
+  inline colour_sorted colour_sort(std::pmr::vector<key> &&R) {
+    return colour_sort_order_policy(std::move(R), true);
   }
 
-  colour_sorted colour_sort_no_order(std::pmr::vector<key> &&R) {
-    return colour_sort_order_policy(false, std::move(R));
+  inline colour_sorted colour_sort_no_order(std::pmr::vector<key> &&R) {
+    return colour_sort_order_policy(std::move(R), false);
   }
 };
 

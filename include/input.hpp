@@ -106,7 +106,7 @@ struct input {
 };
 
 struct feed {
-  static inline constexpr std::size_t CHUNK_SIZE = 1024 * 1024; // 1MB
+  static inline constexpr std::size_t CHUNK_SIZE = 2 * 1024 * 1024; // 1MB
   static_assert(CHUNK_SIZE != 0);
 
   static inline constexpr char deli = '\n', sep = ' ';

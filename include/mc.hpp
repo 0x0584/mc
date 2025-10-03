@@ -20,99 +20,79 @@
 #ifndef MAXCLIQUE_HPP
 #define MAXCLIQUE_HPP
 
-#include <atomic>
-#include <shared_mutex>
-#include <vector>
-
-// #define NDEBUG
-
-#include "cache.hpp"
-#include "colour.hpp"
-#include "graph.hpp"
+#include "branch.hpp"
 
 namespace mc {
-class multithreaded {
-  /*struct branch {
-    branch(const enumerator &E,
-           const std::pmr::unordered_set<enumerator::key> &pruned)
-        : E(E), pruned(pruned) {}
-
-  protected:
-    std::size_t num_nodes = 0;
-    std::pmr::vector<enumerator::key> clique;
-
-    const enumerator &E;
-    const std::pmr::unordered_set<enumerator::key> &pruned;
-  };
-
-  struct branch_heuristic : branch {};
-
-  struct branch_exact : branch {};*/
-
-public:
-  static inline const std::size_t maximum_bound = -1u;
-
-private:
+class clique_solver {
   const graph &G;
-
-  // only a single mutex is used to handle the max_clique and its global size,
-  // in addition to which thread because the max_clique is updated only when we
-  // finished branching, and the size is updated during the branching.  it is
-  // also shared since most of the time we just want a read-op, so it is optimal
-  // to use std::shared_mtx
-  std::shared_mutex mtx;
-  //
-  // the size of the largest clique found so far across all the running threads,
-  // however, it is updated separately from the actual max_clique with the depth
-  // of the branch rather than actually counting the clique vertices
-  std::size_t overall_size = 0;
-  //
-  // after branch termination, if the current thread had found the largest one
-  // so far amongst all the running threads (even if they are still running
-  std::pmr::vector<key> max_clique;
-  //
-  // hence, we can set the max clique few times and avoid unnecessary
-  //  assignments of cliques from several threads, at least in most cases
-  key branching_key;
-
-  // terminate the algorithm early if the depth matches the bound
-  std::atomic_bool upper_bound_reached = false;
-
-  void solution(flavour algo, std::size_t upper_bound);
-
-  bool enlarge_clique_size(key key, std::size_t &max_clique_size,
-                           std::size_t depth);
-
-  void branch_exact(key root, key v, colouring_engine &engine,
-                    colour_sorted &sorted_neighs, std::pmr::vector<key> &clique,
-                    std::size_t &max_clique_size, std::size_t upper_bound,
-                    std::size_t &num_nodes, std::size_t depth = 1);
-
-  void branch_heuristic(key root, key v, colouring_engine &engine,
-                        colour_sorted &sorted_neighs,
-                        std::pmr::vector<key> &clique,
-                        std::size_t &max_clique_size, std::size_t upper_bound,
-                        std::size_t &num_nodes, std::size_t depth = 1);
+  branch::global_context ctx;
 
 public:
-  static inline std::size_t no_upper_bound = -1u;
+  static inline const std::size_t no_upper_bound = -1u;
 
-  explicit multithreaded(const graph &g) : G(g), max_clique(memory::pool()) {
+  explicit clique_solver(const graph &g) : G(g) {
     logger::info("Number of available Threads", args::num_threads);
   }
 
-  ~multithreaded() { logger::debug("~multithreaded()"); }
-
   std::pmr::vector<graph::vertex>
   solve(flavour algo = flavour::exact,
-        // the expected behaviour is (as far as I have tested) the function call
-        // with be launched with the up-to-date values, even though the it seems
-        // to be at compile time, it is dynamic initialisation
         std::size_t lower_bound = args::lower_bound,
         std::size_t upper_bound = args::upper_bound);
 
-  void draw(const std::pmr::vector<graph::vertex> &clique) { // E.draw(clique);
+private:
+  void solution(flavour algo, std::size_t upper_bound,
+                const colour_sorted &root);
+
+  inline bool explore_branch(key k, colour c) {
+    if (ctx.bounded.load(std::memory_order_acquire)) [[unlikely]] {
+      return false;
+    } else if (c <= ctx.snapshot_size()) [[unlikely]] {
+      logger::debug(G.to_vertex(k), "has no sufficient colours. abort search.");
+      return false;
+    } else {
+      return true;
+    }
+  }
+
+  static inline void set_intersection(const key __restrict *nf,
+                                      const key __restrict *nl,
+                                      const key __restrict *ef,
+                                      const key __restrict *el,
+                                      std::pmr::vector<key> &out) {
+    while (nf != nl && ef != el) {
+      if (*nf < *ef) {
+        out.emplace_back(*nf++);
+      } else if (*ef < *nf) {
+        ++ef;
+      } else {
+        ++nf;
+        ++ef;
+      }
+    }
+    std::copy(nf, nl, std::back_inserter(out));
+  }
+
+  inline bool induce_neighbours(key k, colour_sorted root, std::size_t i,
+                                std::pmr::vector<key> &neighs) {
+    auto [nf, nl] = G.neighbours(k);
+    neighs.reserve(G.degree(k));
+
+    std::ptrdiff_t at = static_cast<std::ptrdiff_t>(i);
+    std::pmr::vector<key> excluded(root.get_keys().begin() + at,
+                                   root.get_keys().end(), memory::pool());
+
+    std::sort(excluded.begin(), excluded.end());
+    auto ef = excluded.data();
+    set_intersection(nf, nl, ef, ef + excluded.size(), neighs);
+
+    if (neighs.empty()) [[unlikely]] {
+      logger::debug(G.to_vertex(k), "has no neighbours. abandon branching.");
+      return false;
+    } else {
+      return true;
+    }
   }
 };
+
 } // namespace mc
 #endif // MAXCLIQUE_HPP
